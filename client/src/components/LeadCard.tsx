@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { type Lead } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -9,15 +10,11 @@ interface LeadCardProps {
   index: number;
 }
 
-export function LeadCard({ lead, index }: LeadCardProps) {
+const LeadCardInner = forwardRef<HTMLDivElement, LeadCardProps>(({ lead, index }, ref) => {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.05 }}
-    >
+    <div ref={ref}>
       <Card className="group h-full hover:shadow-lg transition-all duration-300 border-border/60 hover:border-primary/50 bg-card/50 backdrop-blur-sm">
-        <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
+        <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-lg ${
               lead.platform === 'instagram' 
@@ -33,6 +30,7 @@ export function LeadCard({ lead, index }: LeadCardProps) {
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 mt-1 transition-colors"
+                data-testid={`link-profile-${lead.id}`}
               >
                 View Profile <ExternalLink size={10} />
               </a>
@@ -82,6 +80,20 @@ export function LeadCard({ lead, index }: LeadCardProps) {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+});
+
+LeadCardInner.displayName = "LeadCardInner";
+
+export function LeadCard({ lead, index }: LeadCardProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+    >
+      <LeadCardInner lead={lead} index={index} />
     </motion.div>
   );
 }

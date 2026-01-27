@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { scrapeRequestSchema, type ScrapeRequest } from "@shared/schema";
-import { useLeads, useScrapeLeads, useStats, getExportUrl } from "@/hooks/use-leads";
+import { useLeads, useScrapeLeads, useStats, getExportUrl, useProxyStatus } from "@/hooks/use-leads";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadCard } from "@/components/LeadCard";
 import { StatsCard } from "@/components/StatsCard";
-import { Loader2, Search, Download, Target, Users, BarChart3, Sparkles } from "lucide-react";
+import { Loader2, Search, Download, Target, Users, BarChart3, Sparkles, AlertTriangle, Shield } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -22,6 +22,7 @@ export default function Dashboard() {
   
   const { data: leads, isLoading: isLoadingLeads } = useLeads();
   const { data: stats, isLoading: isLoadingStats } = useStats();
+  const { data: proxyStatus } = useProxyStatus();
   const scrapeMutation = useScrapeLeads();
 
   const form = useForm<ScrapeRequest>({
@@ -37,10 +38,18 @@ export default function Dashboard() {
   const onSubmit = (data: ScrapeRequest) => {
     scrapeMutation.mutate(data, {
       onSuccess: (response) => {
-        toast({
-          title: "Scraping Started",
-          description: response.message,
-        });
+        if (response.error) {
+          toast({
+            title: "Configuration Required",
+            description: response.message,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Scraping Complete",
+            description: response.message,
+          });
+        }
       },
       onError: (error) => {
         toast({
@@ -86,18 +95,52 @@ export default function Dashboard() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         
+        {/* Proxy Status Banner */}
+        {proxyStatus && !proxyStatus.configured && (
+          <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
+            <CardContent className="flex items-start gap-4 py-4">
+              <div className="p-2 bg-amber-100 dark:bg-amber-900/50 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-amber-800 dark:text-amber-200">Proxy Configuration Required</h3>
+                <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                  Real scraping requires rotating proxies to bypass rate limits. Set environment variables:
+                </p>
+                <code className="text-xs bg-amber-100 dark:bg-amber-900/50 px-2 py-1 rounded mt-2 inline-block font-mono">
+                  PROXY_HOST, PROXY_PORT, PROXY_USERNAME, PROXY_PASSWORD
+                </code>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {proxyStatus?.configured && (
+          <Card className="border-green-200 bg-green-50 dark:bg-green-950/20 dark:border-green-800">
+            <CardContent className="flex items-center gap-4 py-3">
+              <div className="p-2 bg-green-100 dark:bg-green-900/50 rounded-lg">
+                <Shield className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <span className="font-medium text-green-800 dark:text-green-200">Proxy Connected</span>
+                <span className="text-sm text-green-600 dark:text-green-400 ml-2">Ready for real-time scraping</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <StatsCard
             title="Total Leads"
-            value={isLoadingStats ? "..." : (stats?.totalScraped ?? 0)}
+            value={isLoadingStats ? "..." : (stats?.total ?? 0)}
             description="Leads found across platforms"
             icon={Users}
             trend="neutral"
           />
           <StatsCard
             title="Qualified Leads"
-            value={isLoadingStats ? "..." : (stats?.qualifiedLeads ?? 0)}
+            value={isLoadingStats ? "..." : (stats?.qualified ?? 0)}
             description="High relevance matches"
             icon={Target}
             trend="up"

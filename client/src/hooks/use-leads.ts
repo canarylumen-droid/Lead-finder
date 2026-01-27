@@ -51,3 +51,15 @@ export function useStats() {
 
 // Export URL helper
 export const getExportUrl = () => api.leads.export.path;
+
+// GET /api/proxy-status
+export function useProxyStatus() {
+  return useQuery({
+    queryKey: ['/api/proxy-status'],
+    queryFn: async () => {
+      const res = await fetch('/api/proxy-status');
+      if (!res.ok) throw new Error("Failed to fetch proxy status");
+      return res.json() as Promise<{ configured: boolean; host: string | null; port: number | null }>;
+    },
+  });
+}
