@@ -6,6 +6,7 @@ import { api } from "@shared/routes";
 import { paginationSchema } from "@shared/schema";
 import { z } from "zod";
 import { workerPool } from "./worker-pool";
+import { analyzeOffering } from "./offering-analyzer";
 import type { JobStats, LogEntry } from "@shared/schema";
 
 // Store WebSocket clients per job
@@ -122,25 +123,57 @@ export async function registerRoutes(
     res.json(logs);
   });
 
-  // Start scraping job
+  // Analyze offering and suggest lead types
+  app.post('/api/analyze-offering', async (req, res) => {
+    try {
+      const { offering } = req.body;
+      if (!offering || typeof offering !== 'string') {
+        return res.status(400).json({ error: 'Offering description is required' });
+      }
+      
+      const analysis = await analyzeOffering(offering);
+      res.json(analysis);
+    } catch (error: any) {
+      console.error('Offering analysis error:', error);
+      res.status(500).json({ error: 'Failed to analyze offering' });
+    }
+  });
+
+  // Start scraping job with real keywords
   app.post(api.leads.scrape.path, async (req, res) => {
     try {
-      const { platform, query, quantity, offering } = api.leads.scrape.input.parse(req.body);
+      const { platform, query, quantity, offering, keywords } = req.body;
+      
+      // Parse keywords from query or use provided keywords array
+      let searchKeywords: string[] = [];
+      if (keywords && Array.isArray(keywords)) {
+        searchKeywords = keywords;
+      } else if (query) {
+        // Split query into keywords
+        searchKeywords = query.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0);
+      }
+      
+      if (searchKeywords.length === 0) {
+        return res.status(400).json({ 
+          message: 'Please provide search keywords', 
+          leads: [] 
+        });
+      }
       
       // Create scrape job
       const job = await storage.createScrapeJob({
-        platform,
-        query,
-        offering,
-        quantity,
+        platform: platform || 'both',
+        query: searchKeywords.join(', '),
+        offering: offering || '',
+        quantity: quantity || 50,
         totalWorkers: 20,
       });
 
-      // Start the job in the worker pool (async, doesn't block response)
-      workerPool.startJob(job.id, platform, query, offering, quantity);
+      // Start the job with real scraping (async)
+      workerPool.startJob(job.id, platform || 'both', searchKeywords, offering || '', quantity || 50);
 
       res.json({
-        message: `Job started. Processing ${quantity} leads with 20 workers.`,
+        message: `Job started. Scraping real profiles with keywords: ${searchKeywords.join(', ')}`,
         jobId: job.id.toString(),
         leads: [],
       });
