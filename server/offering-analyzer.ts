@@ -30,8 +30,8 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
   const openai = getOpenAI();
   
   if (!openai) {
-    // Fallback analysis without AI
-    return fallbackOfferingAnalysis(offering);
+    // No AI available - extract keywords directly from user input
+    return extractKeywordsFromOffering(offering);
   }
 
   try {
@@ -46,12 +46,13 @@ Identify 3-5 specific types of leads who would:
 
 For each lead type, provide:
 - Category name (e.g., "Marketing Agency Owners", "E-commerce Brand Founders")
-- Search keywords to find them on Instagram/LinkedIn
+- Search keywords to find them on Instagram/LinkedIn (specific, low competition)
 - Brief description of why they'd buy
 - Typical buyer profile
 - Estimated budget range
 
-Also provide overall search keywords that work across platforms.
+IMPORTANT: Keywords must be SPECIFIC to this exact offering. No generic terms.
+Find niche keywords with low competition that match this exact business.
 
 Respond in JSON:
 {
@@ -66,7 +67,7 @@ Respond in JSON:
       "estimatedBudget": "$X-$Y/month"
     }
   ],
-  "searchKeywords": ["broad", "search", "terms"]
+  "searchKeywords": ["specific", "niche", "terms"]
 }`;
 
     const response = await openai.chat.completions.create({
@@ -74,7 +75,7 @@ Respond in JSON:
       messages: [
         {
           role: "system",
-          content: "You are a B2B lead generation expert. Provide actionable, specific recommendations for finding buyers."
+          content: "You are a B2B lead generation expert. Provide specific, niche keywords - never generic. Focus on low competition, high intent buyers."
         },
         { role: "user", content: prompt }
       ],
@@ -85,45 +86,96 @@ Respond in JSON:
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error("No response from AI");
 
-    return JSON.parse(content) as OfferingAnalysis;
+    const analysis = JSON.parse(content) as OfferingAnalysis;
+    
+    // Verify keywords with second AI call
+    const verified = await verifyKeywords(analysis.searchKeywords, offering);
+    analysis.searchKeywords = verified;
+
+    return analysis;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
-    return fallbackOfferingAnalysis(offering);
+    return extractKeywordsFromOffering(offering);
   }
 }
 
-function fallbackOfferingAnalysis(offering: string): OfferingAnalysis {
-  const lowerOffering = offering.toLowerCase();
+// Second AI agent verifies the keywords are good fit
+async function verifyKeywords(keywords: string[], offering: string): Promise<string[]> {
+  const openai = getOpenAI();
+  if (!openai) return keywords;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You verify search keywords for lead generation. Return only keywords that are specific, low competition, and match the offering exactly."
+        },
+        {
+          role: "user",
+          content: `Offering: ${offering}\n\nProposed keywords: ${keywords.join(', ')}\n\nVerify these keywords are:\n1. Specific to this exact offering (not generic)\n2. Low competition\n3. Will find real buyers\n\nReturn JSON: { "verified": ["keyword1", "keyword2"] }\n\nRemove any generic keywords. Add better ones if needed.`
+        }
+      ],
+      response_format: { type: "json_object" },
+      max_completion_tokens: 300,
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (content) {
+      const result = JSON.parse(content);
+      if (result.verified && result.verified.length > 0) {
+        return result.verified;
+      }
+    }
+  } catch (e) {
+    console.error("Keyword verification failed:", e);
+  }
   
-  // Extract keywords from offering
+  return keywords;
+}
+
+// Extract keywords directly from user's offering text - no hardcoded values
+function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
+  // Split offering into meaningful words
+  const words = offering.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3);
+  
+  // Remove common stop words
+  const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'above', 'below', 'more', 'most', 'other', 'some', 'such', 'only', 'same', 'than', 'very', 'just', 'also', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services'];
+  
+  const meaningfulWords = words.filter(w => !stopWords.includes(w));
+  
+  // Create keyword combinations from the user's actual text
   const keywords: string[] = [];
-  if (lowerOffering.includes('seo')) keywords.push('marketing agency', 'digital marketing');
-  if (lowerOffering.includes('marketing')) keywords.push('agency owner', 'brand founder');
-  if (lowerOffering.includes('design')) keywords.push('creative agency', 'brand designer');
-  if (lowerOffering.includes('software') || lowerOffering.includes('saas')) keywords.push('startup founder', 'tech company');
-  if (lowerOffering.includes('coach')) keywords.push('entrepreneur', 'business owner');
   
-  if (keywords.length === 0) {
-    keywords.push('business owner', 'agency founder', 'entrepreneur');
+  // Take pairs of meaningful words
+  for (let i = 0; i < meaningfulWords.length - 1 && keywords.length < 6; i++) {
+    const pair = `${meaningfulWords[i]} ${meaningfulWords[i + 1]}`;
+    if (!keywords.includes(pair)) {
+      keywords.push(pair);
+    }
+  }
+  
+  // Add single meaningful words if we don't have enough
+  for (const word of meaningfulWords.slice(0, 4)) {
+    if (!keywords.some(k => k.includes(word))) {
+      keywords.push(word);
+    }
   }
 
   return {
-    summary: offering.slice(0, 100),
-    targetAudience: "Business owners and agency founders",
+    summary: offering.slice(0, 150),
+    targetAudience: "Extracted from your offering description",
     suggestedLeadTypes: [
       {
-        category: "Agency Owners",
-        keywords: ["marketing agency", "digital agency", "creative agency"],
-        description: "They need services to scale their business",
-        buyerProfile: "Founders with 5-50 employees",
-        estimatedBudget: "$1,000-$10,000/month"
-      },
-      {
-        category: "E-commerce Founders",
-        keywords: ["ecommerce founder", "DTC brand", "shopify store"],
-        description: "They have revenue and need to grow",
-        buyerProfile: "Brand owners doing $50k+/month",
-        estimatedBudget: "$2,000-$15,000/month"
+        category: "Based on your offering",
+        keywords: keywords.slice(0, 4),
+        description: "Leads matching your specific offering",
+        buyerProfile: "Decision makers in this space",
+        estimatedBudget: "Varies"
       }
     ],
     searchKeywords: keywords,
