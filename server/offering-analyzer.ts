@@ -11,30 +11,23 @@ function getOpenAI(): OpenAI | null {
   return openaiClient;
 }
 
-export interface NicheSuggestion {
-  niche: string;
-  reasoning: string;
-  decisionMaker: string;
-  budgetRange: string;
-}
-
-export interface OfferingAnalysis {
+export interface OfferingSummary {
   summary: string;
-  targetDescription: string;
-  niches: NicheSuggestion[];
+  idealBuyers: string;
+  businessTypes: string[];
+  painPoints: string[];
 }
 
-export interface KeywordGenerationResult {
+export interface KeywordResult {
   keywords: string[];
-  nicheBreakdown: { niche: string; keywords: string[] }[];
 }
 
-// Step 1: Analyze offering and identify ideal buyer niches
-export async function analyzeOffering(offering: string): Promise<OfferingAnalysis> {
+// Step 1: Analyze offering and create a full summary of ideal buyers
+export async function analyzeOffering(offering: string): Promise<OfferingSummary> {
   const openai = getOpenAI();
   
   if (!openai) {
-    return fallbackAnalysis(offering);
+    throw new Error("OpenAI API key is required for analysis");
   }
 
   try {
@@ -42,31 +35,23 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
 
 "${offering}"
 
-Your job is to identify 5-8 specific BUSINESS NICHES that would be BUYERS of this service. These are businesses that NEED what the user offers.
+Analyze this offering and create a comprehensive summary of WHO would be the ideal BUYERS for this service.
 
 CRITICAL RULES:
-1. DO NOT suggest competitors or similar businesses. If user offers "lead generation", do NOT suggest "marketing agencies" - those are competitors, not buyers.
-2. DO NOT suggest businesses that provide similar services. Focus on who NEEDS the service.
-3. Think: "Which businesses would PAY for this service because it solves THEIR problem?"
-4. Be specific with niches (e.g., "HVAC repair companies" not just "contractors")
+1. These are businesses that NEED this service - NOT competitors or similar service providers
+2. If user offers "lead generation" → buyers are businesses that NEED leads (roofing companies, law firms, gyms)
+3. If user offers "website development" → buyers are businesses that NEED websites (restaurants, plumbers, dentists)
+4. If user offers "SEO" → buyers are businesses that NEED SEO (e-commerce stores, local services)
+5. Think about who would PAY for this service because it solves THEIR problem
 
-Examples of correct thinking:
-- User offers "website development" → Buyers: restaurants, dental clinics, plumbers, real estate agents (they NEED websites)
-- User offers "lead generation" → Buyers: roofing companies, law firms, gyms, home improvement contractors (they NEED leads)
-- User offers "SEO services" → Buyers: e-commerce stores, local dentists, chiropractors, wedding photographers (they NEED SEO)
+DO NOT include any generic or hardcoded responses. Analyze the specific offering.
 
 Respond in JSON:
 {
-  "summary": "2-3 sentence overview of who your ideal buyers are and why they need your service",
-  "targetDescription": "The type of decision maker to target (e.g., 'Small business owners who struggle with...')",
-  "niches": [
-    {
-      "niche": "Specific Business Niche Name",
-      "reasoning": "Why this niche desperately needs your service - their pain point",
-      "decisionMaker": "Who makes buying decisions (e.g., 'Owner', 'Marketing Manager')",
-      "budgetRange": "$X-$Y/month typical spend"
-    }
-  ]
+  "summary": "A 2-3 paragraph detailed summary explaining what types of businesses would benefit most from this offering, why they need it, and what problems it solves for them. Be specific and detailed.",
+  "idealBuyers": "A clear description of the ideal buyer persona - their role, their challenges, why they'd pay for this",
+  "businessTypes": ["Specific business type 1", "Specific business type 2", "...up to 10 specific business types that would be buyers"],
+  "painPoints": ["Pain point 1 that this offering solves", "Pain point 2", "..."]
 }`;
 
     const response = await openai.chat.completions.create({
@@ -74,7 +59,7 @@ Respond in JSON:
       messages: [
         {
           role: "system",
-          content: "You identify BUYERS for services, not competitors. Focus on businesses that NEED the service being offered."
+          content: "You identify BUYERS for services. Focus on businesses that NEED the service being offered, not competitors. Provide detailed, specific analysis."
         },
         { role: "user", content: prompt }
       ],
@@ -84,54 +69,51 @@ Respond in JSON:
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error("No response from AI");
 
-    const analysis = JSON.parse(content) as OfferingAnalysis;
-    return analysis;
+    const result = JSON.parse(content) as OfferingSummary;
+    return result;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
-    return fallbackAnalysis(offering);
+    throw new Error("Failed to analyze offering. Please ensure OpenAI is configured.");
   }
 }
 
-// Step 2: Generate search keywords for the identified niches
-export async function generateKeywordsForNiches(offering: string, niches: string[]): Promise<KeywordGenerationResult> {
+// Step 2: Generate search keywords from the summary
+export async function generateKeywordsFromSummary(offering: string, summary: OfferingSummary): Promise<KeywordResult> {
   const openai = getOpenAI();
   
   if (!openai) {
-    return fallbackKeywords(niches);
+    throw new Error("OpenAI API key is required");
   }
 
   try {
-    const prompt = `Generate search keywords to find business owners/decision makers on social media (Instagram/LinkedIn).
+    const prompt = `Based on this analysis, generate search keywords to find business owners on social media (Instagram/LinkedIn).
 
-SERVICE BEING SOLD: "${offering}"
+ORIGINAL OFFERING: "${offering}"
 
-TARGET NICHES (these are the BUYERS, not competitors):
-${niches.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+AI ANALYSIS SUMMARY:
+${summary.summary}
 
-For EACH niche, generate 3-5 specific search terms that would help find these business owners on Instagram/LinkedIn.
+IDEAL BUYERS: ${summary.idealBuyers}
+
+BUSINESS TYPES IDENTIFIED:
+${summary.businessTypes.map((b, i) => `${i + 1}. ${b}`).join('\n')}
+
+PAIN POINTS:
+${summary.painPoints.map((p, i) => `${i + 1}. ${p}`).join('\n')}
+
+Generate 20-30 highly specific search keywords that would help find these business owners on Instagram/LinkedIn.
 
 RULES:
-1. Keywords should find the BUSINESS OWNERS in these niches, not the service provider
-2. Include job titles + niche combinations (e.g., "dental clinic owner", "HVAC business founder")
-3. Include niche-specific terms (e.g., "roofing contractor", "salon owner")
-4. Do NOT include generic terms like "entrepreneur" or "small business"
-5. Do NOT include terms related to the SERVICE being sold (we're finding BUYERS, not sellers)
-
-Example for "restaurant" niche:
-- "restaurant owner"
-- "cafe founder"
-- "food truck owner"
-- "hospitality entrepreneur"
+1. Keywords should find the BUSINESS OWNERS of the types identified above
+2. Combine business types with owner/founder titles (e.g., "restaurant owner", "dental clinic founder")
+3. Include variations and related terms
+4. DO NOT include generic terms like "entrepreneur" or "small business owner"
+5. DO NOT include terms related to the SERVICE being sold - we're finding BUYERS
+6. Each keyword should be 2-4 words max
 
 Respond in JSON:
 {
-  "nicheBreakdown": [
-    {
-      "niche": "Niche Name",
-      "keywords": ["keyword1", "keyword2", "keyword3"]
-    }
-  ],
-  "keywords": ["all", "combined", "keywords", "deduplicated"]
+  "keywords": ["keyword1", "keyword2", "..."]
 }`;
 
     const response = await openai.chat.completions.create({
@@ -143,54 +125,10 @@ Respond in JSON:
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error("No response from AI");
 
-    const result = JSON.parse(content) as KeywordGenerationResult;
+    const result = JSON.parse(content) as KeywordResult;
     return result;
   } catch (error: any) {
     console.error("Keyword generation error:", error.message);
-    return fallbackKeywords(niches);
+    throw new Error("Failed to generate keywords");
   }
-}
-
-// Fallback when no OpenAI
-function fallbackAnalysis(offering: string): OfferingAnalysis {
-  const words = offering.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  
-  return {
-    summary: `Based on "${offering}", we'll help you find businesses that need your service. Please ensure OpenAI is configured for AI-powered analysis.`,
-    targetDescription: "Business owners and decision makers who would benefit from your service",
-    niches: [
-      {
-        niche: "Local Service Businesses",
-        reasoning: "Small local businesses often need outside help with specialized services",
-        decisionMaker: "Owner",
-        budgetRange: "$500-$2000/month"
-      },
-      {
-        niche: "E-commerce Stores",
-        reasoning: "Online businesses frequently outsource specialized work",
-        decisionMaker: "Founder/Owner",
-        budgetRange: "$1000-$5000/month"
-      },
-      {
-        niche: "Professional Services",
-        reasoning: "Lawyers, accountants, and consultants often need support services",
-        decisionMaker: "Managing Partner",
-        budgetRange: "$500-$3000/month"
-      }
-    ],
-  };
-}
-
-function fallbackKeywords(niches: string[]): KeywordGenerationResult {
-  const ownerSuffixes = ['owner', 'founder', 'CEO', 'director'];
-  const keywords: string[] = [];
-  const nicheBreakdown: { niche: string; keywords: string[] }[] = [];
-
-  for (const niche of niches) {
-    const nicheKeywords = ownerSuffixes.map(suffix => `${niche} ${suffix}`);
-    nicheBreakdown.push({ niche, keywords: nicheKeywords });
-    keywords.push(...nicheKeywords);
-  }
-
-  return { keywords: Array.from(new Set(keywords)), nicheBreakdown };
 }
