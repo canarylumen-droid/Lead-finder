@@ -70,20 +70,25 @@ function checkDecisionMaker(title: string): boolean {
 function calculateRelevanceScore(profile: ScrapedProfile, offering: string): number {
   let score = 0;
   
-  if (profile.followerCount >= 50000) score += 30;
-  else if (profile.followerCount >= 20000) score += 25;
-  else if (profile.followerCount >= 10000) score += 20;
-  else if (profile.followerCount >= 5000) score += 15;
+  if (profile.followerCount >= 50000) score += 20;
+  else if (profile.followerCount >= 20000) score += 15;
+  else if (profile.followerCount >= 5000) score += 10;
   
-  if (profile.bio && checkAgencyKeywords(profile.bio)) score += 25;
-  if (profile.title && checkDecisionMaker(profile.title)) score += 20;
-  if (profile.email) score += 15;
+  // Check for decision maker titles in bio or title
+  const bio = (profile.bio || '').toLowerCase();
+  const title = (profile.title || '').toLowerCase();
   
-  if (profile.bio && offering) {
-    const offeringKeywords = offering.toLowerCase().split(/\s+/);
-    const bioLower = profile.bio.toLowerCase();
-    const matchCount = offeringKeywords.filter(kw => kw.length > 3 && bioLower.includes(kw)).length;
-    score += Math.min(matchCount * 5, 10);
+  if (checkDecisionMaker(title) || checkDecisionMaker(bio)) score += 30;
+  if (profile.email) score += 20;
+  
+  if (offering) {
+    const offeringLower = offering.toLowerCase();
+    const bioWords = bio.split(/\s+/).filter(w => w.length > 3);
+    const titleWords = title.split(/\s+/).filter(w => w.length > 3);
+    
+    // Check if profile's bio or title matches the offering's context
+    const matchCount = [...bioWords, ...titleWords].filter(word => offeringLower.includes(word)).length;
+    score += Math.min(matchCount * 10, 30);
   }
   
   return Math.min(score, 100);
@@ -91,7 +96,13 @@ function calculateRelevanceScore(profile: ScrapedProfile, offering: string): num
 
 export function qualifyLead(profile: ScrapedProfile, offering: string): { isQualified: boolean; score: number } {
   const score = calculateRelevanceScore(profile, offering);
-  const isQualified = score >= 50 && profile.followerCount >= 5000 && checkAgencyKeywords(profile.bio || '');
+  const bio = (profile.bio || '').toLowerCase();
+  const title = (profile.title || '').toLowerCase();
+  
+  // A lead is qualified if it's a decision maker OR has a high relevance score
+  const isDecisionMaker = checkDecisionMaker(title) || checkDecisionMaker(bio);
+  const isQualified = score >= 50 && (isDecisionMaker || profile.followerCount >= 1000);
+  
   return { isQualified, score };
 }
 

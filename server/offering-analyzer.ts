@@ -34,26 +34,27 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
   }
 
   try {
-    const prompt = `You are a B2B lead generation expert. Analyze this offering and identify 5-10 distinct, high-value business niches that would BE THE BUYERS for this service.
+    const prompt = `You are a B2B lead generation expert. Analyze the provided business offering and identify 5-10 distinct, high-value business niches that would be the IDEAL BUYERS for this service.
 
 OFFERING: ${offering}
 
 CRITICAL RULES:
-1. Identify 5-10 specific business niches (e.g., "HVAC Companies", "Luxury Real Estate", "Dental Practices") that NEED this service.
-2. DO NOT suggest competitors (e.g., if offering is lead gen, don't suggest other agencies).
-3. For each niche, provide a deep strategic reasoning of why they are a perfect fit, focusing on their specific pain points (e.g., high customer acquisition cost, low follow-up efficiency).
-4. DO NOT generate keywords in this step. Only niche categories and detailed descriptions.
+1. Identify 5-10 specific business niches (e.g., "HVAC Companies", "Luxury Real Estate Agencies", "Dental Practices") that have a high ROI potential for this specific offering.
+2. DO NOT suggest competitors or similar service providers (e.g., if the offering is 'Lead Generation', do not suggest 'Marketing Agencies').
+3. For each niche, provide a deep strategic reasoning (2-3 sentences) explaining WHY they are a perfect fit, focusing on their industry-specific pain points and how this offering solves them.
+4. Focus on niches that are currently underserved or have high growth potential.
+5. Provide a concise summary of the overall market strategy.
 
-Respond in JSON:
+Respond in JSON format:
 {
-  "summary": "High-level overview of the target market strategy",
-  "targetAudience": "Summary of the ideal decision makers",
+  "summary": "High-level overview of the target market strategy and unique value proposition alignment",
+  "targetAudience": "Summary of the ideal decision makers (titles and personas)",
   "suggestedLeadTypes": [
     {
       "category": "Niche Name",
-      "description": "Deep reasoning on ROI and pain points",
-      "buyerProfile": "Decision maker persona (e.g., Founder, Owner)",
-      "estimatedBudget": "$X-$Y/month",
+      "description": "Deep reasoning on ROI, specific pain points, and alignment with the offering",
+      "buyerProfile": "Specific decision maker persona (e.g., Founder, Owner, Operations Manager)",
+      "estimatedBudget": "$X-$Y/month (realistic range for this niche)",
       "keywords": []
     }
   ]
@@ -87,13 +88,14 @@ export async function generateKeywordsForNiche(offering: string, niche: string):
   if (!openai) return [niche];
 
   try {
-    const prompt = `Generate 20 highly specific search keywords for finding decision makers (Owners, Founders, CEOs) in the "${niche}" niche who would buy "${offering}".
+    const prompt = `Generate 20 highly specific search keywords for finding decision makers (Owners, Founders, CEOs, Partners, Principal) in the "${niche}" niche who would be interested in "${offering}".
 
 RULES:
-1. Combine the niche with decision maker titles (e.g., "${niche} Owner", "${niche} Founder").
-2. Include specific industry variations.
-3. DO NOT include the offering itself as a keyword.
-4. Return exactly 20 keywords.
+1. Combine the niche with decision maker titles (e.g., "${niche} Founder", "${niche} CEO").
+2. Focus on intent-rich keywords that a decision maker would use or be associated with.
+3. DO NOT include generic terms or terms related to your own competitors.
+4. Include geographic variations if applicable (e.g., "${niche} in Miami").
+5. Return exactly 20 keywords that maximize the chance of finding a high-value lead.
 
 Respond in JSON: { "keywords": ["keyword1", "keyword2", ...] }`;
 
