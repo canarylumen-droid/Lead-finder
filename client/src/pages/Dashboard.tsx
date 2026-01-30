@@ -9,24 +9,27 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { LeadCard } from "@/components/LeadCard";
 import { StatsCard } from "@/components/StatsCard";
-import { Loader2, Search, Download, Target, Users, BarChart3, Sparkles, Terminal, Copy, CheckCircle, XCircle, AlertCircle, Info, ChevronLeft, ChevronRight, ArrowRight, Play } from "lucide-react";
+import { Loader2, Search, Download, Target, Users, BarChart3, Sparkles, Terminal, Copy, CheckCircle, XCircle, AlertCircle, Info, ChevronLeft, ChevronRight, ArrowRight, Play, Check, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-interface LeadSuggestion {
-  category: string;
-  keywords: string[];
-  description: string;
-  buyerProfile: string;
-  estimatedBudget: string;
+interface NicheSuggestion {
+  niche: string;
+  reasoning: string;
+  decisionMaker: string;
+  budgetRange: string;
 }
 
 interface OfferingAnalysis {
   summary: string;
-  targetAudience: string;
-  suggestedLeadTypes: LeadSuggestion[];
-  searchKeywords: string[];
+  targetDescription: string;
+  niches: NicheSuggestion[];
+}
+
+interface KeywordResult {
+  keywords: string[];
+  nicheBreakdown: { niche: string; keywords: string[] }[];
 }
 
 function LogLine({ log }: { log: LogEntry }) {
@@ -65,12 +68,15 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [currentJobId, setCurrentJobId] = useState<number | null>(null);
   
-  // Flow state
-  const [step, setStep] = useState<'input' | 'suggestions' | 'custom-confirm' | 'scraping'>('input');
+  // Flow state - 4 steps: input → niches → keywords → scraping
+  const [step, setStep] = useState<'input' | 'niches' | 'keywords' | 'scraping'>('input');
   const [analysis, setAnalysis] = useState<OfferingAnalysis | null>(null);
+  const [selectedNiches, setSelectedNiches] = useState<string[]>([]);
+  const [keywordResult, setKeywordResult] = useState<KeywordResult | null>(null);
   const [confirmedKeywords, setConfirmedKeywords] = useState<string[]>([]);
   const [customInput, setCustomInput] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
   const [offering, setOffering] = useState('');
   const [platform, setPlatform] = useState<'instagram' | 'linkedin' | 'both'>('both');
   const [quantity, setQuantity] = useState(100);
@@ -88,7 +94,7 @@ export default function Dashboard() {
     }
   }, [logs]);
 
-  // Step 1: Analyze offering
+  // Step 1: Analyze offering to find ideal buyer niches
   const analyzeOffering = async () => {
     if (!offering.trim()) {
       toast({ title: "Please describe your offering", variant: "destructive" });
@@ -105,10 +111,10 @@ export default function Dashboard() {
       
       if (!res.ok) throw new Error('Analysis failed');
       
-      const data = await res.json();
+      const data = await res.json() as OfferingAnalysis;
       setAnalysis(data);
-      setConfirmedKeywords(data.searchKeywords || []);
-      setStep('suggestions');
+      setSelectedNiches(data.niches.map(n => n.niche));
+      setStep('niches');
     } catch (err) {
       toast({ title: "Failed to analyze offering", variant: "destructive" });
     } finally {
@@ -116,14 +122,50 @@ export default function Dashboard() {
     }
   };
 
-  // When user types custom keywords
-  const handleCustomKeywords = async () => {
+  // Toggle niche selection
+  const toggleNiche = (niche: string) => {
+    setSelectedNiches(prev => 
+      prev.includes(niche) 
+        ? prev.filter(n => n !== niche)
+        : [...prev, niche]
+    );
+  };
+
+  // Step 2: Generate keywords for selected niches
+  const generateKeywords = async () => {
+    if (selectedNiches.length === 0) {
+      toast({ title: "Please select at least one niche", variant: "destructive" });
+      return;
+    }
+    
+    setIsGeneratingKeywords(true);
+    try {
+      const res = await fetch('/api/generate-keywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offering, niches: selectedNiches }),
+      });
+      
+      if (!res.ok) throw new Error('Keyword generation failed');
+      
+      const data = await res.json() as KeywordResult;
+      setKeywordResult(data);
+      setConfirmedKeywords(data.keywords);
+      setStep('keywords');
+    } catch (err) {
+      toast({ title: "Failed to generate keywords", variant: "destructive" });
+    } finally {
+      setIsGeneratingKeywords(false);
+    }
+  };
+
+  // When user types custom keywords directly
+  const handleCustomKeywords = () => {
     if (!customInput.trim()) {
       toast({ title: "Please enter keywords", variant: "destructive" });
       return;
     }
     
-    // Parse user input into keywords
     const userKeywords = customInput.split(',').map(k => k.trim()).filter(k => k.length > 0);
     
     if (userKeywords.length === 0) {
@@ -132,10 +174,16 @@ export default function Dashboard() {
     }
     
     setConfirmedKeywords(userKeywords);
-    setStep('custom-confirm');
+    setKeywordResult({ keywords: userKeywords, nicheBreakdown: [] });
+    setStep('keywords');
   };
 
-  // Start the actual scraping
+  // Remove a keyword from the confirmed list
+  const removeKeyword = (keyword: string) => {
+    setConfirmedKeywords(prev => prev.filter(k => k !== keyword));
+  };
+
+  // Step 3: Start scraping with confirmed keywords
   const startScraping = () => {
     if (confirmedKeywords.length === 0) {
       toast({ title: "No keywords selected", variant: "destructive" });
@@ -154,7 +202,7 @@ export default function Dashboard() {
           if (response.jobId) {
             setCurrentJobId(parseInt(response.jobId));
             setStep('scraping');
-            toast({ title: "Scraping Started", description: `Getting ${quantity} leads with keywords: ${confirmedKeywords.slice(0, 3).join(', ')}...` });
+            toast({ title: "Scraping Started", description: `Finding ${quantity} leads...` });
           }
         },
         onError: (error) => {
@@ -167,9 +215,16 @@ export default function Dashboard() {
   const resetForm = () => {
     setStep('input');
     setAnalysis(null);
+    setSelectedNiches([]);
+    setKeywordResult(null);
     setConfirmedKeywords([]);
     setCustomInput('');
     setCurrentJobId(null);
+  };
+
+  const goBack = () => {
+    if (step === 'niches') setStep('input');
+    else if (step === 'keywords') setStep('niches');
   };
 
   const copyLogs = () => {
@@ -246,92 +301,194 @@ export default function Dashboard() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-primary" />
-                    Describe Your Offering
+                    Step 1: Describe Your Offering
                   </CardTitle>
                   <CardDescription>
-                    Tell us what you sell. AI will analyze and suggest your ideal buyers.
+                    Tell us what you sell. AI will find businesses that NEED your service.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <Textarea 
-                    placeholder="e.g. We provide SEO services for dental clinics to help them get more patients..."
+                    placeholder="e.g. I offer website development for small businesses. I help them get online and attract more customers..."
                     className="min-h-[120px] bg-muted/30"
                     value={offering}
                     onChange={(e) => setOffering(e.target.value)}
                     data-testid="input-offering"
                   />
                   
-                  <div className="text-xs text-muted-foreground">
-                    Or type your own keywords below:
+                  <Button 
+                    className="w-full"
+                    onClick={analyzeOffering}
+                    disabled={isAnalyzing || !offering.trim()}
+                    data-testid="button-analyze"
+                  >
+                    {isAnalyzing ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="mr-2 h-4 w-4" />
+                    )}
+                    Analyze & Find Buyers
+                  </Button>
+
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">Or enter keywords directly</span>
+                    </div>
                   </div>
                   
                   <Input 
-                    placeholder="e.g. dental clinic owner, dentist founder"
+                    placeholder="e.g. restaurant owner, dental clinic founder, gym owner"
                     value={customInput}
                     onChange={(e) => setCustomInput(e.target.value)}
                     data-testid="input-custom-keywords"
                   />
                   
-                  <div className="flex gap-2">
-                    {offering.trim() && (
-                      <Button 
-                        className="flex-1"
-                        onClick={analyzeOffering}
-                        disabled={isAnalyzing}
-                        data-testid="button-analyze"
+                  {customInput.trim() && (
+                    <Button 
+                      variant="outline"
+                      className="w-full"
+                      onClick={handleCustomKeywords}
+                      data-testid="button-use-custom"
+                    >
+                      Use My Keywords
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Step 2: Select Niches */}
+            {step === 'niches' && analysis && (
+              <Card className="border-border/50 shadow-lg">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Target className="w-5 h-5 text-primary" />
+                    Step 2: Select Target Niches
+                  </CardTitle>
+                  <CardDescription className="text-sm">
+                    {analysis.summary}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
+                    <div className="text-sm font-medium mb-2">Your ideal buyers:</div>
+                    <p className="text-xs text-muted-foreground">{analysis.targetDescription}</p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Click to select/deselect niches:</div>
+                    {analysis.niches.map((n, i) => (
+                      <div 
+                        key={i} 
+                        className={`p-3 rounded-lg cursor-pointer transition-all border ${
+                          selectedNiches.includes(n.niche) 
+                            ? 'bg-primary/10 border-primary/40' 
+                            : 'bg-muted/30 border-transparent hover:bg-muted/50'
+                        }`}
+                        onClick={() => toggleNiche(n.niche)}
+                        data-testid={`niche-${i}`}
                       >
-                        {isAnalyzing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Sparkles className="mr-2 h-4 w-4" />
-                        )}
-                        Analyze & Suggest
-                      </Button>
-                    )}
-                    {customInput.trim() && (
-                      <Button 
-                        variant="outline"
-                        onClick={handleCustomKeywords}
-                        data-testid="button-use-custom"
-                      >
-                        Use My Keywords
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    )}
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium text-sm">{n.niche}</div>
+                          {selectedNiches.includes(n.niche) && (
+                            <Check className="w-4 h-4 text-primary" />
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">{n.reasoning}</div>
+                        <div className="flex gap-2 mt-2">
+                          <Badge variant="secondary" className="text-xs">{n.decisionMaker}</Badge>
+                          <Badge variant="outline" className="text-xs">{n.budgetRange}</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <Button variant="outline" size="sm" onClick={goBack}>
+                      <ChevronLeft className="w-4 h-4 mr-1" />
+                      Back
+                    </Button>
+                    <Button 
+                      className="flex-1"
+                      onClick={generateKeywords}
+                      disabled={selectedNiches.length === 0 || isGeneratingKeywords}
+                      data-testid="button-generate-keywords"
+                    >
+                      {isGeneratingKeywords ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-2 h-4 w-4" />
+                      )}
+                      Generate Keywords ({selectedNiches.length} niches)
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
             )}
 
-            {/* Step 2: AI Suggestions */}
-            {step === 'suggestions' && analysis && (
+            {/* Step 3: Confirm Keywords */}
+            {step === 'keywords' && keywordResult && (
               <Card className="border-border/50 shadow-lg">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">AI Analysis Complete</CardTitle>
-                  <CardDescription className="text-sm">
-                    {analysis.targetAudience}
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Search className="w-5 h-5 text-primary" />
+                    Step 3: Confirm Search Keywords
+                  </CardTitle>
+                  <CardDescription>
+                    These are the exact keywords we'll use to find your ideal buyers. Click to remove any.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
-                    <div className="text-sm font-medium mb-2">Keywords I'll search for:</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {confirmedKeywords.map((kw, i) => (
-                        <Badge key={i} variant="secondary" className="text-xs">
-                          {kw}
-                        </Badge>
+                  {keywordResult.nicheBreakdown.length > 0 && (
+                    <div className="space-y-3">
+                      {keywordResult.nicheBreakdown.map((nb, i) => (
+                        <div key={i} className="p-2 bg-muted/30 rounded-lg">
+                          <div className="text-xs font-medium text-muted-foreground mb-1">{nb.niche}</div>
+                          <div className="flex flex-wrap gap-1">
+                            {nb.keywords.map((kw, j) => (
+                              <Badge 
+                                key={j} 
+                                variant={confirmedKeywords.includes(kw) ? "default" : "secondary"}
+                                className="text-xs cursor-pointer"
+                                onClick={() => removeKeyword(kw)}
+                              >
+                                {kw}
+                                {confirmedKeywords.includes(kw) && (
+                                  <X className="w-3 h-3 ml-1" />
+                                )}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium">Suggested buyer types:</div>
-                    {analysis.suggestedLeadTypes.slice(0, 3).map((lead, i) => (
-                      <div key={i} className="p-2 bg-muted/50 rounded text-xs">
-                        <div className="font-medium">{lead.category}</div>
-                        <div className="text-muted-foreground">{lead.description}</div>
+                  )}
+
+                  {keywordResult.nicheBreakdown.length === 0 && (
+                    <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
+                      <div className="text-sm font-medium mb-2">Your keywords:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {confirmedKeywords.map((kw, i) => (
+                          <Badge 
+                            key={i} 
+                            variant="default" 
+                            className="text-xs cursor-pointer"
+                            onClick={() => removeKeyword(kw)}
+                          >
+                            {kw}
+                            <X className="w-3 h-3 ml-1" />
+                          </Badge>
+                        ))}
                       </div>
-                    ))}
+                    </div>
+                  )}
+
+                  <div className="p-2 bg-muted/50 rounded text-xs text-muted-foreground">
+                    {confirmedKeywords.length} keywords selected
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -367,93 +524,22 @@ export default function Dashboard() {
                   </div>
 
                   <div className="flex gap-2 pt-2">
-                    <Button variant="outline" size="sm" onClick={resetForm}>
+                    <Button variant="outline" size="sm" onClick={goBack}>
+                      <ChevronLeft className="w-4 h-4 mr-1" />
                       Back
                     </Button>
                     <Button 
                       className="flex-1 bg-green-600 hover:bg-green-700"
                       onClick={startScraping}
-                      disabled={scrapeMutation.isPending}
-                      data-testid="button-proceed"
+                      disabled={confirmedKeywords.length === 0 || scrapeMutation.isPending}
+                      data-testid="button-start-scraping"
                     >
                       {scrapeMutation.isPending ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : (
                         <Play className="mr-2 h-4 w-4" />
                       )}
-                      Proceed - Get {quantity} Leads
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Custom Keywords Confirmation */}
-            {step === 'custom-confirm' && (
-              <Card className="border-border/50 shadow-lg">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Confirm Your Keywords</CardTitle>
-                  <CardDescription>
-                    These are the exact keywords I'll search for:
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
-                    <div className="flex flex-wrap gap-1.5">
-                      {confirmedKeywords.map((kw, i) => (
-                        <Badge key={i} variant="default" className="text-xs">
-                          {kw}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-muted-foreground">Platform</label>
-                      <select 
-                        className="w-full mt-1 p-2 rounded-md bg-muted/50 border border-border text-sm"
-                        value={platform}
-                        onChange={(e) => setPlatform(e.target.value as any)}
-                      >
-                        <option value="both">Both</option>
-                        <option value="instagram">Instagram</option>
-                        <option value="linkedin">LinkedIn</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground">Quantity</label>
-                      <select 
-                        className="w-full mt-1 p-2 rounded-md bg-muted/50 border border-border text-sm"
-                        value={quantity}
-                        onChange={(e) => setQuantity(parseInt(e.target.value))}
-                      >
-                        <option value="50">50 leads</option>
-                        <option value="100">100 leads</option>
-                        <option value="250">250 leads</option>
-                        <option value="500">500 leads</option>
-                        <option value="1000">1000 leads</option>
-                        <option value="2000">2000 leads</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-2">
-                    <Button variant="outline" size="sm" onClick={resetForm}>
-                      Back
-                    </Button>
-                    <Button 
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                      onClick={startScraping}
-                      disabled={scrapeMutation.isPending}
-                      data-testid="button-proceed-custom"
-                    >
-                      {scrapeMutation.isPending ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Play className="mr-2 h-4 w-4" />
-                      )}
-                      Proceed - Get {quantity} Leads
+                      Start Scraping - Get {quantity} Leads
                     </Button>
                   </div>
                 </CardContent>
@@ -546,31 +632,32 @@ export default function Dashboard() {
               ) : (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <AnimatePresence mode="popLayout">
-                      {leads.map((lead, index) => (
-                        <LeadCard key={lead.id} lead={lead} index={index} />
-                      ))}
-                    </AnimatePresence>
+                    {leads.map((lead, index) => (
+                      <LeadCard key={lead.id} lead={lead} index={index} />
+                    ))}
                   </div>
                   
+                  {/* Pagination */}
                   {totalPages > 1 && (
-                    <div className="flex items-center justify-center gap-2 pt-4">
+                    <div className="flex justify-center items-center gap-2 pt-4">
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setPage(p => Math.max(1, p - 1))}
                         disabled={page === 1}
+                        onClick={() => setPage(p => p - 1)}
+                        data-testid="button-prev-page"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </Button>
-                      <span className="text-sm text-muted-foreground px-3">
-                        {page} / {totalPages}
+                      <span className="text-sm text-muted-foreground">
+                        Page {page} of {totalPages}
                       </span>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                         disabled={page === totalPages}
+                        onClick={() => setPage(p => p + 1)}
+                        data-testid="button-next-page"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </Button>

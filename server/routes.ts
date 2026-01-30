@@ -7,7 +7,7 @@ import { api } from "@shared/routes";
 import { paginationSchema } from "@shared/schema";
 import { z } from "zod";
 import { workerPool } from "./worker-pool";
-import { analyzeOffering } from "./offering-analyzer";
+import { analyzeOffering, generateKeywordsForNiches } from "./offering-analyzer";
 import type { JobStats, LogEntry } from "@shared/schema";
 
 // Store WebSocket clients per job
@@ -140,17 +140,16 @@ export async function registerRoutes(
     }
   });
 
-  // Get keywords for a specific niche
+  // Generate keywords for selected niches
   app.post('/api/generate-keywords', async (req, res) => {
     try {
-      const { offering, niche } = req.body;
-      if (!offering || !niche) {
-        return res.status(400).json({ error: 'Offering and niche are required' });
+      const { offering, niches } = req.body;
+      if (!offering || !niches || !Array.isArray(niches)) {
+        return res.status(400).json({ error: 'Offering and niches array are required' });
       }
       
-      const { generateKeywordsForNiche } = await import("./offering-analyzer");
-      const keywords = await generateKeywordsForNiche(offering, niche);
-      res.json({ keywords });
+      const result = await generateKeywordsForNiches(offering, niches);
+      res.json(result);
     } catch (error: any) {
       console.error('Keyword generation error:', error);
       res.status(500).json({ error: 'Failed to generate keywords' });

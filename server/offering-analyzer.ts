@@ -11,51 +11,60 @@ function getOpenAI(): OpenAI | null {
   return openaiClient;
 }
 
-export interface LeadSuggestion {
-  category: string;
-  keywords: string[];
-  description: string;
-  buyerProfile: string;
-  estimatedBudget: string;
+export interface NicheSuggestion {
+  niche: string;
+  reasoning: string;
+  decisionMaker: string;
+  budgetRange: string;
 }
 
 export interface OfferingAnalysis {
   summary: string;
-  targetAudience: string;
-  suggestedLeadTypes: LeadSuggestion[];
-  searchKeywords: string[];
+  targetDescription: string;
+  niches: NicheSuggestion[];
 }
 
+export interface KeywordGenerationResult {
+  keywords: string[];
+  nicheBreakdown: { niche: string; keywords: string[] }[];
+}
+
+// Step 1: Analyze offering and identify ideal buyer niches
 export async function analyzeOffering(offering: string): Promise<OfferingAnalysis> {
   const openai = getOpenAI();
   
   if (!openai) {
-    return extractKeywordsFromOffering(offering);
+    return fallbackAnalysis(offering);
   }
 
   try {
-    const prompt = `You are a B2B lead generation expert. Analyze the provided business offering and identify 5-10 distinct, high-value business niches that would be the IDEAL BUYERS for this service.
+    const prompt = `You are a B2B sales strategist. A user sells this service/product:
 
-OFFERING: ${offering}
+"${offering}"
+
+Your job is to identify 5-8 specific BUSINESS NICHES that would be BUYERS of this service. These are businesses that NEED what the user offers.
 
 CRITICAL RULES:
-1. Identify 5-10 specific business niches (e.g., "HVAC Companies", "Luxury Real Estate Agencies", "Dental Practices") that have a high ROI potential for this specific offering.
-2. DO NOT suggest competitors or similar service providers (e.g., if the offering is 'Lead Generation', do not suggest 'Marketing Agencies').
-3. For each niche, provide a deep strategic reasoning (2-3 sentences) explaining WHY they are a perfect fit, focusing on their industry-specific pain points and how this offering solves them.
-4. Focus on niches that are currently underserved or have high growth potential.
-5. Provide a concise summary of the overall market strategy.
+1. DO NOT suggest competitors or similar businesses. If user offers "lead generation", do NOT suggest "marketing agencies" - those are competitors, not buyers.
+2. DO NOT suggest businesses that provide similar services. Focus on who NEEDS the service.
+3. Think: "Which businesses would PAY for this service because it solves THEIR problem?"
+4. Be specific with niches (e.g., "HVAC repair companies" not just "contractors")
 
-Respond in JSON format:
+Examples of correct thinking:
+- User offers "website development" → Buyers: restaurants, dental clinics, plumbers, real estate agents (they NEED websites)
+- User offers "lead generation" → Buyers: roofing companies, law firms, gyms, home improvement contractors (they NEED leads)
+- User offers "SEO services" → Buyers: e-commerce stores, local dentists, chiropractors, wedding photographers (they NEED SEO)
+
+Respond in JSON:
 {
-  "summary": "High-level overview of the target market strategy and unique value proposition alignment",
-  "targetAudience": "Summary of the ideal decision makers (titles and personas)",
-  "suggestedLeadTypes": [
+  "summary": "2-3 sentence overview of who your ideal buyers are and why they need your service",
+  "targetDescription": "The type of decision maker to target (e.g., 'Small business owners who struggle with...')",
+  "niches": [
     {
-      "category": "Niche Name",
-      "description": "Deep reasoning on ROI, specific pain points, and alignment with the offering",
-      "buyerProfile": "Specific decision maker persona (e.g., Founder, Owner, Operations Manager)",
-      "estimatedBudget": "$X-$Y/month (realistic range for this niche)",
-      "keywords": []
+      "niche": "Specific Business Niche Name",
+      "reasoning": "Why this niche desperately needs your service - their pain point",
+      "decisionMaker": "Who makes buying decisions (e.g., 'Owner', 'Marketing Manager')",
+      "budgetRange": "$X-$Y/month typical spend"
     }
   ]
 }`;
@@ -65,7 +74,7 @@ Respond in JSON format:
       messages: [
         {
           role: "system",
-          content: "Expert business analyst. Identify profitable niches for services. No competitors. Deep reasoning only."
+          content: "You identify BUYERS for services, not competitors. Focus on businesses that NEED the service being offered."
         },
         { role: "user", content: prompt }
       ],
@@ -79,95 +88,109 @@ Respond in JSON format:
     return analysis;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
-    return extractKeywordsFromOffering(offering);
+    return fallbackAnalysis(offering);
   }
 }
 
-export async function generateKeywordsForNiche(offering: string, niche: string): Promise<string[]> {
+// Step 2: Generate search keywords for the identified niches
+export async function generateKeywordsForNiches(offering: string, niches: string[]): Promise<KeywordGenerationResult> {
   const openai = getOpenAI();
-  if (!openai) return [niche];
+  
+  if (!openai) {
+    return fallbackKeywords(niches);
+  }
 
   try {
-    const prompt = `Generate 20 highly specific search keywords for finding decision makers (Owners, Founders, CEOs, Partners, Principal) in the "${niche}" niche who would be interested in "${offering}".
+    const prompt = `Generate search keywords to find business owners/decision makers on social media (Instagram/LinkedIn).
+
+SERVICE BEING SOLD: "${offering}"
+
+TARGET NICHES (these are the BUYERS, not competitors):
+${niches.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+For EACH niche, generate 3-5 specific search terms that would help find these business owners on Instagram/LinkedIn.
 
 RULES:
-1. Combine the niche with decision maker titles (e.g., "${niche} Founder", "${niche} CEO").
-2. Focus on intent-rich keywords that a decision maker would use or be associated with.
-3. DO NOT include generic terms or terms related to your own competitors.
-4. Include geographic variations if applicable (e.g., "${niche} in Miami").
-5. Return exactly 20 keywords that maximize the chance of finding a high-value lead.
+1. Keywords should find the BUSINESS OWNERS in these niches, not the service provider
+2. Include job titles + niche combinations (e.g., "dental clinic owner", "HVAC business founder")
+3. Include niche-specific terms (e.g., "roofing contractor", "salon owner")
+4. Do NOT include generic terms like "entrepreneur" or "small business"
+5. Do NOT include terms related to the SERVICE being sold (we're finding BUYERS, not sellers)
 
-Respond in JSON: { "keywords": ["keyword1", "keyword2", ...] }`;
+Example for "restaurant" niche:
+- "restaurant owner"
+- "cafe founder"
+- "food truck owner"
+- "hospitality entrepreneur"
+
+Respond in JSON:
+{
+  "nicheBreakdown": [
+    {
+      "niche": "Niche Name",
+      "keywords": ["keyword1", "keyword2", "keyword3"]
+    }
+  ],
+  "keywords": ["all", "combined", "keywords", "deduplicated"]
+}`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });
 
     const content = response.choices[0]?.message?.content;
-    if (content) {
-      const result = JSON.parse(content);
-      return result.keywords || [];
-    }
-  } catch (e) {
-    console.error("Keyword generation failed:", e);
+    if (!content) throw new Error("No response from AI");
+
+    const result = JSON.parse(content) as KeywordGenerationResult;
+    return result;
+  } catch (error: any) {
+    console.error("Keyword generation error:", error.message);
+    return fallbackKeywords(niches);
   }
-  return [niche];
 }
 
-// Fallback: extract from user's offering text
-function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
-  const words = offering.toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 3);
+// Fallback when no OpenAI
+function fallbackAnalysis(offering: string): OfferingAnalysis {
+  const words = offering.toLowerCase().split(/\s+/).filter(w => w.length > 3);
   
-  const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services', 'business', 'company', 'offer', 'offering'];
-  
-  const uniqueWords = new Set(words.filter(w => !stopWords.includes(w)));
-  const meaningfulWords = Array.from(uniqueWords);
-  
-  // Create diverse keyword combinations
-  const keywords: string[] = [];
-  
-  // Add buyer-focused variations
-  const buyerSuffixes = ['owner', 'founder', 'ceo', 'director', 'manager', 'president', 'managing director'];
-  
-  // Suggested generic niches if no AI
-  const fallbackNiches = meaningfulWords.length > 0 
-    ? meaningfulWords.slice(0, 5).map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    : ['Small Business', 'Startup', 'Enterprise', 'Local Business', 'E-commerce'];
-  
-  for (const niche of fallbackNiches) {
-    for (const suffix of buyerSuffixes.slice(0, 4)) {
-      keywords.push(`${niche} ${suffix}`);
-    }
-  }
-
-  for (const word of meaningfulWords.slice(0, 15)) {
-    for (const suffix of buyerSuffixes.slice(0, 3)) {
-      keywords.push(`${word} ${suffix}`);
-    }
-  }
-  
-  // Add industry combinations
-  for (let i = 0; i < meaningfulWords.length - 1 && keywords.length < 100; i++) {
-    keywords.push(`${meaningfulWords[i]} ${meaningfulWords[i + 1]}`);
-  }
-
   return {
-    summary: `Based on your offering of "${offering}", we've identified several potential target niches. These are generated based on the keywords in your description.`,
-    targetAudience: "Business owners and decision makers relevant to your offering",
-    suggestedLeadTypes: [
+    summary: `Based on "${offering}", we'll help you find businesses that need your service. Please ensure OpenAI is configured for AI-powered analysis.`,
+    targetDescription: "Business owners and decision makers who would benefit from your service",
+    niches: [
       {
-        category: fallbackNiches[0] || "Target Audience",
-        keywords: keywords.slice(0, 20),
-        description: "Decision makers identified from your offering keywords.",
-        buyerProfile: "Founders, CEOs, business owners",
-        estimatedBudget: "Variable"
+        niche: "Local Service Businesses",
+        reasoning: "Small local businesses often need outside help with specialized services",
+        decisionMaker: "Owner",
+        budgetRange: "$500-$2000/month"
+      },
+      {
+        niche: "E-commerce Stores",
+        reasoning: "Online businesses frequently outsource specialized work",
+        decisionMaker: "Founder/Owner",
+        budgetRange: "$1000-$5000/month"
+      },
+      {
+        niche: "Professional Services",
+        reasoning: "Lawyers, accountants, and consultants often need support services",
+        decisionMaker: "Managing Partner",
+        budgetRange: "$500-$3000/month"
       }
     ],
-    searchKeywords: keywords.slice(0, 100),
   };
+}
+
+function fallbackKeywords(niches: string[]): KeywordGenerationResult {
+  const ownerSuffixes = ['owner', 'founder', 'CEO', 'director'];
+  const keywords: string[] = [];
+  const nicheBreakdown: { niche: string; keywords: string[] }[] = [];
+
+  for (const niche of niches) {
+    const nicheKeywords = ownerSuffixes.map(suffix => `${niche} ${suffix}`);
+    nicheBreakdown.push({ niche, keywords: nicheKeywords });
+    keywords.push(...nicheKeywords);
+  }
+
+  return { keywords: Array.from(new Set(keywords)), nicheBreakdown };
 }
