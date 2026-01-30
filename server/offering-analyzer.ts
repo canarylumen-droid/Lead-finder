@@ -163,7 +163,8 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
   
   const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services', 'business', 'company', 'offer', 'offering'];
   
-  const meaningfulWords = [...new Set(words.filter(w => !stopWords.includes(w)))];
+  const uniqueWords = new Set(words.filter(w => !stopWords.includes(w)));
+  const meaningfulWords = Array.from(uniqueWords);
   
   // Create diverse keyword combinations
   const keywords: string[] = [];
