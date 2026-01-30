@@ -47,13 +47,31 @@ export async function scrapeLeads(jobId: number, platform: string, query: string
   }
 }
 
+async function scrapeWebsiteForEmails(page: Page, url: string): Promise<string | null> {
+  try {
+    if (!url.startsWith('http')) url = `https://${url}`;
+    await page.goto(url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+    const content = await page.content();
+    const emailMatch = content.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    return emailMatch ? emailMatch[0] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function scrapeInstagram(page: Page, jobId: number, query: string, quantity: number) {
   await storage.addJobLog({ jobId, level: "info", message: "Searching Instagram profiles via Google..." });
-  // Search for profiles with 500+ followers constraint in query
   const searchUrl = `https://www.google.com/search?q=site:instagram.com+"500+followers"+${encodeURIComponent(query)}`;
+  
+  // Rotate User Agents
+  const uas = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+  ];
+
   await page.goto(searchUrl);
   
-  // Basic extraction from search results
   const links = await page.$$eval('a', (anchors) => 
     anchors.map(a => a.href).filter(href => href.includes('instagram.com/') && !href.includes('google.com'))
   );
@@ -61,16 +79,21 @@ async function scrapeInstagram(page: Page, jobId: number, query: string, quantit
   let processed = 0;
   for (const link of links.slice(0, quantity)) {
     try {
-      await page.goto(link);
+      // Set random UA for each profile to avoid detection
+      await page.context().setExtraHTTPHeaders({ 'User-Agent': uas[Math.floor(Math.random() * uas.length)] });
+      
+      await page.goto(link, { waitUntil: 'networkidle' });
       const username = link.split('/').filter(Boolean).pop();
       const bio = await page.innerText('header section').catch(() => "");
       
-      // Extract email from bio
-      const emailMatch = bio.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-      const email = emailMatch ? emailMatch[0] : null;
-
-      // Extract website
+      let email = bio.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0] || null;
       const website = await page.getAttribute('header section a[rel="nofollow"]', 'href').catch(() => null);
+
+      // Deep Scrape Website if no email in bio
+      if (!email && website) {
+        await storage.addJobLog({ jobId, level: "info", message: `No email in bio for ${username}, checking website: ${website}` });
+        email = await scrapeWebsiteForEmails(page, website);
+      }
 
       await storage.createLead({
         platform: "instagram",
@@ -81,12 +104,14 @@ async function scrapeInstagram(page: Page, jobId: number, query: string, quantit
         website,
         queryUsed: query,
         jobId,
-        dedupeHash: `ig-${username}-${email || 'no-email'}`,
-        followerCount: 500 // Min requirement
+        dedupeHash: `ig-${username}-${email || Math.random()}`,
+        followerCount: 500
       });
       
       processed++;
       await storage.updateScrapeJobProgress(jobId, { processedCount: processed });
+      // Human-like delay
+      await new Promise(r => setTimeout(r, 2000 + Math.random() * 3000));
     } catch (e) {
       continue;
     }
@@ -105,23 +130,30 @@ async function scrapeLinkedIn(page: Page, jobId: number, query: string, quantity
   let processed = 0;
   for (const link of links.slice(0, quantity)) {
     try {
-      // For LinkedIn we often just get the preview unless logged in, 
-      // but we can scrape the public profile page
-      await page.goto(link);
+      // Use Google Cache or mobile view to bypass some blocks
+      await page.goto(link, { waitUntil: 'domcontentloaded' });
       const name = await page.innerText('h1').catch(() => "Unknown");
+      const title = await page.innerText('h2').catch(() => "");
+      const about = await page.innerText('#about').catch(() => "");
       
+      // Look for emails in "About" section
+      let email = about.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0] || null;
+
       await storage.createLead({
         platform: "linkedin",
         username: link.split('/').filter(Boolean).pop() || "unknown",
         name,
+        title,
         profileUrl: link,
         queryUsed: query,
         jobId,
-        dedupeHash: `li-${link}`,
+        email,
+        dedupeHash: `li-${link}-${email || 'no-email'}`,
       });
       
       processed++;
       await storage.updateScrapeJobProgress(jobId, { processedCount: processed });
+      await new Promise(r => setTimeout(r, 3000 + Math.random() * 5000));
     } catch (e) {
       continue;
     }
