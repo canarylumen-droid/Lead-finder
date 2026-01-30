@@ -34,40 +34,29 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
   }
 
   try {
-    // First AI: Generate 100+ diverse keywords
-    const prompt = `You are a B2B lead generation expert. Analyze this offering and find WHO would BUY it.
+    const prompt = `You are a B2B lead generation expert. Analyze this offering and identify 5-10 distinct, high-value business niches that would BE THE BUYERS for this service.
 
 OFFERING: ${offering}
 
 CRITICAL RULES:
-1. Find BUYERS of this service, NOT fellow agencies or competitors.
-2. If the offering is "lead generation" or "SEO", you MUST find businesses that NEED these services (e.g., real estate agents, dentists, roofers, local boutiques, law firms), NOT other marketing/lead gen agencies.
-3. Generate niche, specific business categories that are likely to have a high budget and high need for this service.
-4. For each category, generate at least 20 diverse keywords including job titles (e.g., "Real Estate Agent", "Broker", "Realtor"), business types, and industry-specific terms.
-5. NEVER suggest keywords that are just variations of the offering itself (e.g., if offering is "lead gen", do not suggest "lead gen owner").
-6. Focus on finding business owners/founders/CEOs of target businesses.
-7. Generate AT LEAST 100 diverse search keywords in total across categories.
-8. SUMMARY: Provide a deep reasoning summary of WHY these specific niches were suggested, outside of the words provided in the offering. Analyze the business value and pain points.
-
-Think about:
-- Which local or national businesses have high customer lifetime value and need more leads?
-- What specific niches (e.g., "Luxury Home Realtor", "Implant Dentist") are most profitable?
-- Who are the decision makers in these high-value niches?
+1. Identify 5-10 specific business niches (e.g., "HVAC Companies", "Luxury Real Estate", "Dental Practices") that NEED this service.
+2. DO NOT suggest competitors (e.g., if offering is lead gen, don't suggest other agencies).
+3. For each niche, provide a deep strategic reasoning of why they are a perfect fit, focusing on their specific pain points (e.g., high customer acquisition cost, low follow-up efficiency).
+4. DO NOT generate keywords in this step. Only niche categories and detailed descriptions.
 
 Respond in JSON:
 {
-  "summary": "Detailed strategic reasoning on why these niches were chosen based on ROI potential and pain points",
-  "targetAudience": "Specific high-value business niches and decision makers",
+  "summary": "High-level overview of the target market strategy",
+  "targetAudience": "Summary of the ideal decision makers",
   "suggestedLeadTypes": [
     {
-      "category": "Specific Niche Business (e.g., High-end Real Estate)",
-      "keywords": ["specific keyword 1", "specific keyword 2", ...],
-      "description": "Detailed explanation of why this specific niche needs the offering right now",
-      "buyerProfile": "Decision maker title and persona",
-      "estimatedBudget": "$X-$Y/month"
+      "category": "Niche Name",
+      "description": "Deep reasoning on ROI and pain points",
+      "buyerProfile": "Decision maker persona (e.g., Founder, Owner)",
+      "estimatedBudget": "$X-$Y/month",
+      "keywords": []
     }
-  ],
-  "searchKeywords": ["keyword1", "keyword2", ...]
+  ]
 }`;
 
     const response = await openai.chat.completions.create({
@@ -75,24 +64,17 @@ Respond in JSON:
       messages: [
         {
           role: "system",
-          content: "You are an expert at finding buyers for B2B services. You understand that if someone sells lead generation, you find businesses that NEED leads (restaurants, clinics, real estate agents), NOT other lead gen agencies. Always find the END BUYERS. Generate 100+ keywords minimum."
+          content: "Expert business analyst. Identify profitable niches for services. No competitors. Deep reasoning only."
         },
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
-      max_completion_tokens: 4000,
     });
 
     const content = response.choices[0]?.message?.content;
     if (!content) throw new Error("No response from AI");
 
     const analysis = JSON.parse(content) as OfferingAnalysis;
-    
-    // Second AI: Verify keywords are for BUYERS not competitors
-    const verified = await verifyBuyerKeywords(analysis.searchKeywords, offering);
-    analysis.searchKeywords = verified;
-
-    console.log(`AI generated ${analysis.searchKeywords.length} verified keywords`);
     return analysis;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
@@ -100,58 +82,36 @@ Respond in JSON:
   }
 }
 
-// Second AI verifies keywords are for BUYERS not competitors
-async function verifyBuyerKeywords(keywords: string[], offering: string): Promise<string[]> {
+export async function generateKeywordsForNiche(offering: string, niche: string): Promise<string[]> {
   const openai = getOpenAI();
-  if (!openai) return keywords;
+  if (!openai) return [niche];
 
   try {
+    const prompt = `Generate 20 highly specific search keywords for finding decision makers (Owners, Founders, CEOs) in the "${niche}" niche who would buy "${offering}".
+
+RULES:
+1. Combine the niche with decision maker titles (e.g., "${niche} Owner", "${niche} Founder").
+2. Include specific industry variations.
+3. DO NOT include the offering itself as a keyword.
+4. Return exactly 20 keywords.
+
+Respond in JSON: { "keywords": ["keyword1", "keyword2", ...] }`;
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You verify search keywords find BUYERS, not competitors. Remove any keywords that would find fellow agencies or competitors."
-        },
-        {
-          role: "user",
-          content: `Offering: ${offering}
-
-Keywords to verify: ${keywords.join(', ')}
-
-REMOVE keywords that would find:
-- Other agencies offering similar services
-- Competitors or fellow service providers
-- Freelancers
-- Generic terms that won't find buyers
-
-KEEP keywords that find:
-- Business owners who NEED this service
-- Decision makers in industries that would PAY for this
-- Specific niches and job titles of potential BUYERS
-
-Return JSON: { "verified": ["keyword1", "keyword2", ...], "removed": ["bad1", "bad2"] }
-
-Keep at least 80 keywords. Add better buyer-focused ones if needed.`
-        }
-      ],
+      messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
-      max_completion_tokens: 2000,
     });
 
     const content = response.choices[0]?.message?.content;
     if (content) {
       const result = JSON.parse(content);
-      if (result.verified && result.verified.length > 0) {
-        console.log(`Verified ${result.verified.length} keywords, removed ${result.removed?.length || 0}`);
-        return result.verified;
-      }
+      return result.keywords || [];
     }
   } catch (e) {
-    console.error("Keyword verification failed:", e);
+    console.error("Keyword generation failed:", e);
   }
-  
-  return keywords;
+  return [niche];
 }
 
 // Fallback: extract from user's offering text

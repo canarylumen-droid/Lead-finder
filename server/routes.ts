@@ -140,6 +140,23 @@ export async function registerRoutes(
     }
   });
 
+  // Get keywords for a specific niche
+  app.post('/api/generate-keywords', async (req, res) => {
+    try {
+      const { offering, niche } = req.body;
+      if (!offering || !niche) {
+        return res.status(400).json({ error: 'Offering and niche are required' });
+      }
+      
+      const { generateKeywordsForNiche } = await import("./offering-analyzer");
+      const keywords = await generateKeywordsForNiche(offering, niche);
+      res.json({ keywords });
+    } catch (error: any) {
+      console.error('Keyword generation error:', error);
+      res.status(500).json({ error: 'Failed to generate keywords' });
+    }
+  });
+
   // Start scraping job with real keywords
   app.post(api.leads.scrape.path, async (req, res) => {
     try {
