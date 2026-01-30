@@ -75,7 +75,6 @@ class WorkerPool extends EventEmitter {
     await this.emitLog(jobId, undefined, 'info', `Job initialized and processing...`);
     await this.emitStats(jobId);
   }
-  }
 
   private async completeJob(jobId: number, processedCount: number, qualifiedCount: number, duplicatesSkipped: number) {
     this.activeJobs.delete(jobId);
