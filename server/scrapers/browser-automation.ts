@@ -4,7 +4,7 @@ import { storage } from "../storage";
 export async function scrapeLeads(jobId: number, platform: string, query: string, quantity: number) {
   const browser: Browser = await chromium.launch({ 
     headless: true,
-    executablePath: process.env.CHROME_BIN || undefined,
+    executablePath: "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium",
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
