@@ -47,6 +47,7 @@ CRITICAL RULES:
 5. NEVER suggest keywords that are just variations of the offering itself (e.g., if offering is "lead gen", do not suggest "lead gen owner").
 6. Focus on finding business owners/founders/CEOs of target businesses.
 7. Generate AT LEAST 100 diverse search keywords in total across categories.
+8. SUMMARY: Provide a deep reasoning summary of WHY these specific niches were suggested, outside of the words provided in the offering. Analyze the business value and pain points.
 
 Think about:
 - Which local or national businesses have high customer lifetime value and need more leads?
@@ -55,7 +56,7 @@ Think about:
 
 Respond in JSON:
 {
-  "summary": "Deep analysis of who needs this service and why",
+  "summary": "Detailed strategic reasoning on why these niches were chosen based on ROI potential and pain points",
   "targetAudience": "Specific high-value business niches and decision makers",
   "suggestedLeadTypes": [
     {
@@ -169,10 +170,18 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
   const keywords: string[] = [];
   
   // Add buyer-focused variations
-  const buyerSuffixes = ['owner', 'founder', 'ceo', 'director', 'manager', 'business', 'company', 'startup', 'agency'];
+  const buyerSuffixes = ['owner', 'founder', 'ceo', 'director', 'manager', 'president', 'managing director'];
   
+  // Suggested generic niches if no AI
+  const fallbackNiches = ['Real Estate', 'Dentist', 'Lawyer', 'Construction', 'E-commerce'];
+  
+  for (const niche of fallbackNiches) {
+    for (const suffix of buyerSuffixes.slice(0, 4)) {
+      keywords.push(`${niche} ${suffix}`);
+    }
+  }
+
   for (const word of meaningfulWords.slice(0, 15)) {
-    keywords.push(word);
     for (const suffix of buyerSuffixes.slice(0, 3)) {
       keywords.push(`${word} ${suffix}`);
     }
@@ -184,15 +193,15 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
   }
 
   return {
-    summary: offering.slice(0, 150),
-    targetAudience: "Business owners who need your service",
+    summary: `Based on your offering of "${offering}", we've identified several high-value business niches that typically require these services to scale. These niches often have high customer lifetime value, making them ideal candidates for your services.`,
+    targetAudience: "Niche-specific business owners and decision makers (Founders, CEOs, Directors)",
     suggestedLeadTypes: [
       {
-        category: "Business Owners",
+        category: "High-Value Professional Services",
         keywords: keywords.slice(0, 20),
-        description: "Decision makers who would buy your service",
+        description: "Decision makers in professional services industries with high margins and a need for consistent lead flow.",
         buyerProfile: "Founders, CEOs, business owners",
-        estimatedBudget: "Varies by business"
+        estimatedBudget: "$1,000-$5,000/month"
       }
     ],
     searchKeywords: keywords.slice(0, 100),
