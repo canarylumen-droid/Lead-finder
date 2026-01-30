@@ -80,11 +80,13 @@ async function scrapeInstagram(page: Page, jobId: number, query: string, quantit
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
   ];
 
-  await page.goto(searchUrl);
+  await page.goto(searchUrl, { waitUntil: 'networkidle' });
   
   const links = await page.$$eval('a', (anchors) => 
     anchors.map(a => a.href).filter(href => href.includes('instagram.com/') && !href.includes('google.com'))
   );
+
+  await storage.addJobLog({ jobId, level: "info", message: `Found ${links.length} potential Instagram profiles` });
 
   let processed = 0;
   for (const link of links.slice(0, quantity)) {
@@ -123,6 +125,7 @@ async function scrapeInstagram(page: Page, jobId: number, query: string, quantit
       // Human-like delay
       await new Promise(r => setTimeout(r, 2000 + Math.random() * 3000));
     } catch (e) {
+      console.error(`Error scraping Instagram profile ${link}:`, e);
       continue;
     }
   }
