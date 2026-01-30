@@ -209,3 +209,59 @@ export async function batchAnalyzeProfiles(
   
   return results;
 }
+
+// Extract business email from website URL
+export async function extractEmailFromWebsite(url: string): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    clearTimeout(timeout);
+    
+    if (!response.ok) return null;
+    
+    const html = await response.text();
+    
+    // Find all emails in HTML
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const matches = html.match(emailRegex) || [];
+    
+    // Filter out common non-business emails
+    const validEmails = matches.filter(email => {
+      const lower = email.toLowerCase();
+      return !lower.includes('example.com') &&
+             !lower.includes('test.com') &&
+             !lower.includes('noreply') &&
+             !lower.includes('no-reply') &&
+             !lower.includes('donotreply') &&
+             !lower.includes('@sentry') &&
+             !lower.includes('@wix.com') &&
+             !lower.includes('@squarespace') &&
+             !lower.includes('@wordpress') &&
+             !lower.includes('@shopify') &&
+             !lower.includes('.png') &&
+             !lower.includes('.jpg') &&
+             !lower.includes('.gif');
+    });
+    
+    // Prefer contact/info/hello emails
+    const preferred = validEmails.find(e => 
+      e.includes('contact') || e.includes('info') || e.includes('hello') || e.includes('support')
+    );
+    
+    return preferred || validEmails[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+// Check if AI is available
+export function hasAICapability(): boolean {
+  return !!process.env.OPENAI_API_KEY;
+}
