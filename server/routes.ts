@@ -1,3 +1,4 @@
+import { scrapeLeads } from "./scrapers/browser-automation";
 import type { Express } from "express";
 import type { Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -170,7 +171,7 @@ export async function registerRoutes(
       });
 
       // Start the job with real scraping (async)
-      workerPool.startJob(job.id, platform || 'both', searchKeywords, offering || '', quantity || 50);
+      scrapeLeads(job.id, platform || 'both', searchKeywords.join(' '), quantity || 50).catch(console.error);
 
       res.json({
         message: `Job started. Scraping real profiles with keywords: ${searchKeywords.join(', ')}`,

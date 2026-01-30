@@ -23,6 +23,7 @@ export const leads = pgTable("leads", {
   jobId: integer("job_id"),
   dedupeHash: text("dedupe_hash").notNull(), // hash(email + source)
   scrapedAt: timestamp("scraped_at").defaultNow(),
+  website: text("website"), // NEW: added website field
   metadata: jsonb("metadata"),
 }, (table) => ({
   dedupeHashIdx: uniqueIndex("dedupe_hash_idx").on(table.dedupeHash),
