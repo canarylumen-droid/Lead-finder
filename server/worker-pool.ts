@@ -65,53 +65,68 @@ class WorkerPool extends EventEmitter {
     await storage.startScrapeJob(jobId);
     this.activeJobs.set(jobId, { running: true, targetCount: quantity });
     
-    await this.emitLog(jobId, undefined, 'info', `Starting parallel scraping with ${this.maxWorkers} workers`);
-    await this.emitLog(jobId, undefined, 'info', `Target: ${quantity} leads from ${platform}`);
-    await this.emitLog(jobId, undefined, 'info', `Keywords: ${keywordList.join(', ')}`);
+    await this.emitLog(jobId, undefined, 'info', `Starting with ${this.maxWorkers} parallel workers`);
+    await this.emitLog(jobId, undefined, 'info', `Target: ${quantity} leads | Platform: ${platform}`);
+    await this.emitLog(jobId, undefined, 'info', `Using ${keywordList.length} keywords for search`);
     
     await storage.updateScrapeJobProgress(jobId, { activeWorkers: this.maxWorkers });
     await this.emitStats(jobId);
 
     try {
-      // Parallel scraping for both platforms
       const scrapeTasks: Promise<ScrapedProfile[]>[] = [];
       
       const onProgress = async (msg: string) => {
-        await this.emitLog(jobId, Math.floor(Math.random() * this.maxWorkers), 'info', msg);
+        const workerId = Math.floor(Math.random() * this.maxWorkers);
+        await this.emitLog(jobId, workerId, 'info', msg);
       };
 
-      const igQuantity = platform === 'both' ? Math.ceil(quantity * 0.6) : (platform === 'instagram' ? quantity : 0);
-      const liQuantity = platform === 'both' ? Math.ceil(quantity * 0.4) : (platform === 'linkedin' ? quantity : 0);
+      // EXACT 50/50 SPLIT when both platforms selected
+      let igQuantity = 0;
+      let liQuantity = 0;
+      
+      if (platform === 'both') {
+        // 50% each platform
+        igQuantity = Math.ceil(quantity / 2);
+        liQuantity = Math.ceil(quantity / 2);
+      } else if (platform === 'instagram') {
+        igQuantity = quantity;
+      } else if (platform === 'linkedin') {
+        liQuantity = quantity;
+      }
 
+      await this.emitLog(jobId, undefined, 'info', `Split: Instagram ${igQuantity} | LinkedIn ${liQuantity}`);
+
+      // Start scrapers in parallel
       if (igQuantity > 0) {
-        await this.emitLog(jobId, 0, 'info', `Starting Instagram scraper (target: ${igQuantity})`);
-        scrapeTasks.push(scrapeInstagramProfiles(keywordList, igQuantity, onProgress));
+        await this.emitLog(jobId, 0, 'info', `Instagram scraper starting (target: ${igQuantity})`);
+        scrapeTasks.push(scrapeInstagramProfiles(keywordList, igQuantity * 2, onProgress));
       }
 
       if (liQuantity > 0) {
-        await this.emitLog(jobId, 1, 'info', `Starting LinkedIn scraper (target: ${liQuantity})`);
-        scrapeTasks.push(scrapeLinkedInProfiles(keywordList, liQuantity, onProgress));
+        await this.emitLog(jobId, 1, 'info', `LinkedIn scraper starting (target: ${liQuantity})`);
+        scrapeTasks.push(scrapeLinkedInProfiles(keywordList, liQuantity * 2, onProgress));
       }
 
-      // Run scrapers in parallel
+      // Run all scrapers in parallel
       const results = await Promise.all(scrapeTasks);
       const allProfiles = results.flat();
 
-      await this.emitLog(jobId, undefined, 'info', `Scraped ${allProfiles.length} raw profiles. Analyzing in parallel...`);
+      await this.emitLog(jobId, undefined, 'info', `Scraped ${allProfiles.length} raw profiles`);
+      await this.emitLog(jobId, undefined, 'info', `Analyzing with AI to find BUYERS (not competitors)...`);
 
-      // Process profiles in parallel with concurrency limit
+      // Process profiles in parallel with AI analysis
       const limit = pLimit(this.maxWorkers);
       let processedCount = 0;
       let qualifiedCount = 0;
       let duplicatesSkipped = 0;
+      let skippedCompetitors = 0;
 
-      const processTasks = allProfiles.slice(0, quantity).map((profile, index) => 
+      const processTasks = allProfiles.slice(0, quantity * 2).map((profile, index) => 
         limit(async () => {
           const workerId = index % this.maxWorkers;
           
           // Check follower range
           if (!isValidFollowerCount(profile.followerCount)) {
-            await this.emitLog(jobId, workerId, 'warn', `Skip: ${profile.username} - ${profile.followerCount} followers`);
             return null;
           }
 
@@ -120,12 +135,12 @@ class WorkerPool extends EventEmitter {
           const isDuplicate = await storage.checkDuplicate(dedupeHash);
           if (isDuplicate) {
             duplicatesSkipped++;
-            await this.emitLog(jobId, workerId, 'warn', `Dupe: ${profile.username}`);
             return null;
           }
 
-          // AI Analysis
+          // AI Analysis - checks if this is a BUYER for the offering
           await this.emitLog(jobId, workerId, 'info', `Analyzing: ${profile.name || profile.username}`);
+          
           const analysis = await analyzeProfileWithAI({
             platform: profile.platform,
             username: profile.username,
@@ -137,13 +152,24 @@ class WorkerPool extends EventEmitter {
             email: profile.email,
           }, offering);
 
-          // Skip freelancers
-          if (analysis.businessType === 'freelancer' || analysis.relevanceScore < 30) {
-            await this.emitLog(jobId, workerId, 'warn', `Skip: ${profile.username} - ${analysis.businessType}`);
+          // Skip competitors, freelancers, and low-match profiles
+          if (analysis.businessType === 'competitor' || analysis.businessType === 'freelancer') {
+            skippedCompetitors++;
+            await this.emitLog(jobId, workerId, 'warn', `Skip: ${profile.username} (${analysis.businessType})`);
             return null;
           }
 
-          // Save lead
+          if (analysis.relevanceScore < 30) {
+            await this.emitLog(jobId, workerId, 'warn', `Skip: ${profile.username} - low match (${analysis.relevanceScore}%)`);
+            return null;
+          }
+
+          // If we have enough qualified leads, stop
+          if (processedCount >= quantity) {
+            return null;
+          }
+
+          // Save qualified lead
           const lead: InsertLead = {
             platform: profile.platform,
             username: profile.username,
@@ -159,7 +185,7 @@ class WorkerPool extends EventEmitter {
             contextSummary: analysis.contextSummary,
             isQualified: analysis.isQualified,
             relevanceScore: analysis.relevanceScore,
-            queryUsed: keywordList.join(', '),
+            queryUsed: keywordList.slice(0, 5).join(', '),
             jobId,
             dedupeHash,
             metadata: { analysis },
@@ -170,16 +196,17 @@ class WorkerPool extends EventEmitter {
             processedCount++;
             if (analysis.isQualified) qualifiedCount++;
 
+            const emoji = analysis.isQualified ? 'QUALIFIED' : 'Added';
             await this.emitLog(
               jobId,
               workerId,
               analysis.isQualified ? 'success' : 'info',
-              `${analysis.isQualified ? 'QUALIFIED' : 'Added'}: ${profile.name || profile.username} (${analysis.businessType}, ${analysis.relevanceScore}%)${profile.email ? ' +email' : ''}`,
+              `${emoji}: ${profile.name || profile.username} - ${analysis.businessType} (${analysis.relevanceScore}%)${profile.email ? ' +email' : ''}`,
               { email: profile.email }
             );
           }
 
-          // Update progress every few leads
+          // Update stats periodically
           if (processedCount % 5 === 0) {
             await storage.updateScrapeJobProgress(jobId, {
               processedCount,
@@ -195,13 +222,14 @@ class WorkerPool extends EventEmitter {
 
       await Promise.all(processTasks);
 
-      // Final progress update
+      // Final update
       await storage.updateScrapeJobProgress(jobId, {
         processedCount,
         qualifiedCount,
         duplicatesSkipped,
       });
 
+      await this.emitLog(jobId, undefined, 'info', `Skipped ${skippedCompetitors} competitors/freelancers`);
       await this.completeJob(jobId, processedCount, qualifiedCount, duplicatesSkipped);
 
     } catch (error: any) {
@@ -219,7 +247,7 @@ class WorkerPool extends EventEmitter {
       jobId,
       undefined,
       'success',
-      `Completed: ${processedCount} leads, ${qualifiedCount} qualified, ${duplicatesSkipped} dupes skipped`
+      `Done! ${processedCount} leads found, ${qualifiedCount} qualified, ${duplicatesSkipped} duplicates skipped`
     );
     await this.emitStats(jobId);
     this.emit('complete', jobId);

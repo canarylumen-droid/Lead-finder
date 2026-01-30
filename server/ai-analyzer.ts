@@ -30,6 +30,7 @@ interface AnalysisResult {
   reasoning: string;
 }
 
+// Fast parallel AI analysis
 export async function analyzeProfileWithAI(
   profile: ProfileData,
   offering: string
@@ -37,40 +38,36 @@ export async function analyzeProfileWithAI(
   try {
     const openai = getOpenAI();
     if (!openai) {
-      console.log("OpenAI not configured - using dynamic analysis from profile data");
-      return analyzeFromProfileData(profile, offering);
+      return analyzeWithoutAI(profile, offering);
     }
 
-    const prompt = `Analyze this social media profile to determine if they are a good fit for our offering.
+    // Use fast model for quick analysis
+    const prompt = `Quick analysis - would this person BUY this service?
 
-OFFERING: ${offering}
+SERVICE: ${offering}
 
 PROFILE:
-- Platform: ${profile.platform}
-- Username: ${profile.username}
-- Name: ${profile.name || 'Unknown'}
+- Name: ${profile.name || profile.username}
 - Title: ${profile.title || 'Unknown'}
 - Company: ${profile.company || 'Unknown'}
-- Followers: ${profile.followerCount}
 - Bio: ${profile.bio || 'No bio'}
-- Has Email: ${profile.email ? 'Yes' : 'No'}
+- Platform: ${profile.platform}
+- Followers: ${profile.followerCount}
 
-Determine:
-1. Business Type: What kind of business is this based on their bio/title?
-2. Is Qualified: Would they likely need and afford this offering?
-3. Relevance Score: 0-100 based on match to offering
-4. Context Summary: 1-2 sentences about fit
+RULES:
+1. Is this a BUYER (business owner who needs this service)?
+2. NOT a competitor or fellow agency
+3. NOT a freelancer
+4. NOT someone offering similar services
+5. Has budget (business owner, founder, CEO, director)
 
-Skip freelancers, individuals without business signals.
-Only qualify businesses/agencies that could actually buy.
-
-Respond in JSON:
+Quick JSON response:
 {
-  "businessType": "string",
   "isQualified": boolean,
-  "relevanceScore": number,
-  "contextSummary": "string",
-  "reasoning": "string"
+  "relevanceScore": 0-100,
+  "businessType": "buyer|competitor|freelancer|employee|unknown",
+  "contextSummary": "One sentence: who they are and why they match/don't",
+  "reasoning": "Brief reason"
 }`;
 
     const response = await openai.chat.completions.create({
@@ -78,18 +75,16 @@ Respond in JSON:
       messages: [
         {
           role: "system",
-          content: "You are a lead qualification expert. Analyze profiles based on their actual data. Be strict - only qualify real business opportunities."
+          content: "Fast lead qualifier. Find BUYERS not competitors. Return JSON only."
         },
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
-      max_completion_tokens: 500,
+      max_completion_tokens: 200,
     });
 
     const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("No response from AI");
-    }
+    if (!content) throw new Error("No AI response");
 
     const result = JSON.parse(content) as AnalysisResult;
     
@@ -102,86 +97,82 @@ Respond in JSON:
     };
   } catch (error: any) {
     console.error("AI analysis error:", error.message);
-    return analyzeFromProfileData(profile, offering);
+    return analyzeWithoutAI(profile, offering);
   }
 }
 
-// Analyze profile using actual profile data - no hardcoded keywords
-function analyzeFromProfileData(profile: ProfileData, offering: string): AnalysisResult {
+// Fast non-AI analysis based on profile data
+function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResult {
   const bio = (profile.bio || '').toLowerCase();
   const title = (profile.title || '').toLowerCase();
   const name = profile.name || profile.username;
-  const company = profile.company || '';
   
-  // Extract words from offering to match against profile
+  let score = 30; // Base score
+  let businessType = 'unknown';
+  let isQualified = false;
+  
+  // Extract key words from offering to match
   const offeringWords = offering.toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length > 3);
   
-  let score = 0;
-  let businessType = 'unknown';
-  let matchedTerms: string[] = [];
+  // Check for buyer signals
+  const buyerSignals = ['owner', 'founder', 'ceo', 'president', 'director', 'head of', 'vp ', 'vice president'];
+  const hasBuyerTitle = buyerSignals.some(s => title.includes(s) || bio.includes(s));
   
-  // Check if profile bio/title contains words from the offering
+  if (hasBuyerTitle) {
+    score += 30;
+    businessType = 'buyer';
+  }
+  
+  // Check for competitor signals (they offer similar services)
+  const competitorSignals = ['agency', 'consultant', 'freelancer', 'we help', 'i help', 'services', 'marketing agency', 'digital agency'];
+  const isCompetitor = competitorSignals.some(s => bio.includes(s) || title.includes(s));
+  
+  if (isCompetitor) {
+    score -= 40;
+    businessType = 'competitor';
+  }
+  
+  // Check for freelancer signals
+  const freelancerSignals = ['freelance', 'for hire', 'available', 'dm for rates', 'open to work'];
+  const isFreelancer = freelancerSignals.some(s => bio.includes(s));
+  
+  if (isFreelancer) {
+    score -= 30;
+    businessType = 'freelancer';
+  }
+  
+  // Check if bio mentions relevant industry (potential buyer)
+  let matchCount = 0;
   for (const word of offeringWords) {
     if (bio.includes(word) || title.includes(word)) {
-      score += 10;
-      matchedTerms.push(word);
+      matchCount++;
     }
   }
+  score += matchCount * 5;
   
-  // Follower scoring - more followers = more established
-  if (profile.followerCount >= 50000) score += 20;
-  else if (profile.followerCount >= 20000) score += 15;
-  else if (profile.followerCount >= 10000) score += 10;
-  else if (profile.followerCount >= 5000) score += 5;
+  // Follower bonus
+  if (profile.followerCount >= 10000) score += 10;
+  if (profile.followerCount >= 30000) score += 10;
   
-  // Detect business type from actual bio content
-  if (bio.includes('agency') || bio.includes('studio')) {
-    businessType = 'agency';
-    score += 15;
-  } else if (bio.includes('founder') || bio.includes('ceo') || bio.includes('owner')) {
-    businessType = 'business_owner';
-    score += 15;
-  } else if (bio.includes('coach') || bio.includes('mentor')) {
-    businessType = 'coach';
-    score += 10;
-  } else if (bio.includes('consultant')) {
-    businessType = 'consultant';
-    score += 10;
-  } else if (company) {
-    businessType = 'professional';
-    score += 5;
+  // Email bonus
+  if (profile.email) score += 15;
+  
+  // Final qualification
+  isQualified = score >= 50 && businessType !== 'competitor' && businessType !== 'freelancer';
+  
+  if (isQualified && businessType === 'unknown') {
+    businessType = 'buyer';
   }
   
-  // Email bonus - they're contactable
-  if (profile.email) {
-    score += 15;
-  }
-  
-  // Title indicates decision maker
-  if (title.includes('founder') || title.includes('ceo') || title.includes('owner') || 
-      title.includes('director') || title.includes('head') || title.includes('president')) {
-    score += 15;
-  }
-  
-  // Penalize if looks like freelancer
-  if (bio.includes('freelance') || bio.includes('for hire') || bio.includes('available for')) {
-    businessType = 'freelancer';
-    score -= 20;
-  }
-  
-  const isQualified = score >= 40 && businessType !== 'freelancer';
-  
-  // Build context from actual profile data
   let context = `${name}`;
   if (profile.title) context += `, ${profile.title}`;
-  if (company) context += ` at ${company}`;
-  context += `.`;
+  context += `. `;
   
-  if (matchedTerms.length > 0) {
-    context += ` Profile matches: ${matchedTerms.slice(0, 3).join(', ')}.`;
+  if (matchCount > 0) {
+    context += `Matches ${matchCount} industry terms.`;
   }
   
   return {
@@ -189,6 +180,32 @@ function analyzeFromProfileData(profile: ProfileData, offering: string): Analysi
     relevanceScore: Math.min(100, Math.max(0, score)),
     businessType,
     contextSummary: context,
-    reasoning: `Analyzed based on profile data. Matched ${matchedTerms.length} terms from offering.`,
+    reasoning: isQualified ? 'Potential buyer with decision-making role' : 'Does not match buyer criteria',
   };
+}
+
+// Batch analyze multiple profiles in parallel (fast)
+export async function batchAnalyzeProfiles(
+  profiles: ProfileData[],
+  offering: string,
+  concurrency: number = 10
+): Promise<Map<string, AnalysisResult>> {
+  const results = new Map<string, AnalysisResult>();
+  
+  // Process in parallel batches
+  const batches: ProfileData[][] = [];
+  for (let i = 0; i < profiles.length; i += concurrency) {
+    batches.push(profiles.slice(i, i + concurrency));
+  }
+  
+  for (const batch of batches) {
+    const promises = batch.map(async (profile) => {
+      const result = await analyzeProfileWithAI(profile, offering);
+      results.set(profile.username, result);
+    });
+    
+    await Promise.all(promises);
+  }
+  
+  return results;
 }

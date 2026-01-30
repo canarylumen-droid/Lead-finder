@@ -30,57 +30,57 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
   const openai = getOpenAI();
   
   if (!openai) {
-    // No AI available - extract keywords directly from user input
     return extractKeywordsFromOffering(offering);
   }
 
   try {
-    const prompt = `You are a B2B sales expert. Analyze this business offering and determine who would most likely buy it.
+    // First AI: Generate 100+ diverse keywords
+    const prompt = `You are a B2B lead generation expert. Analyze this offering and find WHO would BUY it.
 
 OFFERING: ${offering}
 
-Identify 3-5 specific types of leads who would:
-1. Actually need this service/product
-2. Have budget to pay for it (not freelancers, but businesses with revenue)
-3. Be decision makers who can say yes
+CRITICAL RULES:
+1. Find BUYERS of this service, NOT fellow agencies or competitors
+2. If they sell "lead generation", find businesses that NEED leads (restaurants, dentists, real estate), NOT other lead gen agencies
+3. If they sell "SEO", find businesses that need SEO (local shops, lawyers, clinics), NOT marketing agencies
+4. Find business OWNERS/founders/CEOs who make buying decisions
+5. NO freelancers, NO employees, NO fellow service providers
+6. Focus on NICHE, LOW-COMPETITION keywords that find real buyers
+7. Generate AT LEAST 100 diverse search keywords
 
-For each lead type, provide:
-- Category name (e.g., "Marketing Agency Owners", "E-commerce Brand Founders")
-- Search keywords to find them on Instagram/LinkedIn (specific, low competition)
-- Brief description of why they'd buy
-- Typical buyer profile
-- Estimated budget range
-
-IMPORTANT: Keywords must be SPECIFIC to this exact offering. No generic terms.
-Find niche keywords with low competition that match this exact business.
+Think about:
+- What industries need this service?
+- What job titles would buy this?
+- What company types would pay for this?
+- What problems does this solve? Who has those problems?
 
 Respond in JSON:
 {
-  "summary": "Brief summary of the offering",
-  "targetAudience": "Who this is for",
+  "summary": "Brief offering summary",
+  "targetAudience": "Who would BUY this",
   "suggestedLeadTypes": [
     {
-      "category": "string",
-      "keywords": ["keyword1", "keyword2"],
-      "description": "Why they'd buy",
-      "buyerProfile": "Who exactly",
+      "category": "Business type that would BUY",
+      "keywords": ["at least 20 specific keywords for this category"],
+      "description": "Why they would buy",
+      "buyerProfile": "Decision maker type",
       "estimatedBudget": "$X-$Y/month"
     }
   ],
-  "searchKeywords": ["specific", "niche", "terms"]
+  "searchKeywords": ["MINIMUM 100 diverse, specific, niche keywords - job titles, business types, industries, company names patterns - all potential BUYERS"]
 }`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
-          content: "You are a B2B lead generation expert. Provide specific, niche keywords - never generic. Focus on low competition, high intent buyers."
+          content: "You are an expert at finding buyers for B2B services. You understand that if someone sells lead generation, you find businesses that NEED leads (restaurants, clinics, real estate agents), NOT other lead gen agencies. Always find the END BUYERS. Generate 100+ keywords minimum."
         },
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
-      max_completion_tokens: 1000,
+      max_completion_tokens: 4000,
     });
 
     const content = response.choices[0]?.message?.content;
@@ -88,10 +88,11 @@ Respond in JSON:
 
     const analysis = JSON.parse(content) as OfferingAnalysis;
     
-    // Verify keywords with second AI call
-    const verified = await verifyKeywords(analysis.searchKeywords, offering);
+    // Second AI: Verify keywords are for BUYERS not competitors
+    const verified = await verifyBuyerKeywords(analysis.searchKeywords, offering);
     analysis.searchKeywords = verified;
 
+    console.log(`AI generated ${analysis.searchKeywords.length} verified keywords`);
     return analysis;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
@@ -99,8 +100,8 @@ Respond in JSON:
   }
 }
 
-// Second AI agent verifies the keywords are good fit
-async function verifyKeywords(keywords: string[], offering: string): Promise<string[]> {
+// Second AI verifies keywords are for BUYERS not competitors
+async function verifyBuyerKeywords(keywords: string[], offering: string): Promise<string[]> {
   const openai = getOpenAI();
   if (!openai) return keywords;
 
@@ -110,21 +111,39 @@ async function verifyKeywords(keywords: string[], offering: string): Promise<str
       messages: [
         {
           role: "system",
-          content: "You verify search keywords for lead generation. Return only keywords that are specific, low competition, and match the offering exactly."
+          content: "You verify search keywords find BUYERS, not competitors. Remove any keywords that would find fellow agencies or competitors."
         },
         {
           role: "user",
-          content: `Offering: ${offering}\n\nProposed keywords: ${keywords.join(', ')}\n\nVerify these keywords are:\n1. Specific to this exact offering (not generic)\n2. Low competition\n3. Will find real buyers\n\nReturn JSON: { "verified": ["keyword1", "keyword2"] }\n\nRemove any generic keywords. Add better ones if needed.`
+          content: `Offering: ${offering}
+
+Keywords to verify: ${keywords.join(', ')}
+
+REMOVE keywords that would find:
+- Other agencies offering similar services
+- Competitors or fellow service providers
+- Freelancers
+- Generic terms that won't find buyers
+
+KEEP keywords that find:
+- Business owners who NEED this service
+- Decision makers in industries that would PAY for this
+- Specific niches and job titles of potential BUYERS
+
+Return JSON: { "verified": ["keyword1", "keyword2", ...], "removed": ["bad1", "bad2"] }
+
+Keep at least 80 keywords. Add better buyer-focused ones if needed.`
         }
       ],
       response_format: { type: "json_object" },
-      max_completion_tokens: 300,
+      max_completion_tokens: 2000,
     });
 
     const content = response.choices[0]?.message?.content;
     if (content) {
       const result = JSON.parse(content);
       if (result.verified && result.verified.length > 0) {
+        console.log(`Verified ${result.verified.length} keywords, removed ${result.removed?.length || 0}`);
         return result.verified;
       }
     }
@@ -135,49 +154,47 @@ async function verifyKeywords(keywords: string[], offering: string): Promise<str
   return keywords;
 }
 
-// Extract keywords directly from user's offering text - no hardcoded values
+// Fallback: extract from user's offering text
 function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
-  // Split offering into meaningful words
   const words = offering.toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length > 3);
   
-  // Remove common stop words
-  const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'above', 'below', 'more', 'most', 'other', 'some', 'such', 'only', 'same', 'than', 'very', 'just', 'also', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services'];
+  const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services', 'business', 'company', 'offer', 'offering'];
   
-  const meaningfulWords = words.filter(w => !stopWords.includes(w));
+  const meaningfulWords = [...new Set(words.filter(w => !stopWords.includes(w)))];
   
-  // Create keyword combinations from the user's actual text
+  // Create diverse keyword combinations
   const keywords: string[] = [];
   
-  // Take pairs of meaningful words
-  for (let i = 0; i < meaningfulWords.length - 1 && keywords.length < 6; i++) {
-    const pair = `${meaningfulWords[i]} ${meaningfulWords[i + 1]}`;
-    if (!keywords.includes(pair)) {
-      keywords.push(pair);
+  // Add buyer-focused variations
+  const buyerSuffixes = ['owner', 'founder', 'ceo', 'director', 'manager', 'business', 'company', 'startup', 'agency'];
+  
+  for (const word of meaningfulWords.slice(0, 15)) {
+    keywords.push(word);
+    for (const suffix of buyerSuffixes.slice(0, 3)) {
+      keywords.push(`${word} ${suffix}`);
     }
   }
   
-  // Add single meaningful words if we don't have enough
-  for (const word of meaningfulWords.slice(0, 4)) {
-    if (!keywords.some(k => k.includes(word))) {
-      keywords.push(word);
-    }
+  // Add industry combinations
+  for (let i = 0; i < meaningfulWords.length - 1 && keywords.length < 100; i++) {
+    keywords.push(`${meaningfulWords[i]} ${meaningfulWords[i + 1]}`);
   }
 
   return {
     summary: offering.slice(0, 150),
-    targetAudience: "Extracted from your offering description",
+    targetAudience: "Business owners who need your service",
     suggestedLeadTypes: [
       {
-        category: "Based on your offering",
-        keywords: keywords.slice(0, 4),
-        description: "Leads matching your specific offering",
-        buyerProfile: "Decision makers in this space",
-        estimatedBudget: "Varies"
+        category: "Business Owners",
+        keywords: keywords.slice(0, 20),
+        description: "Decision makers who would buy your service",
+        buyerProfile: "Founders, CEOs, business owners",
+        estimatedBudget: "Varies by business"
       }
     ],
-    searchKeywords: keywords,
+    searchKeywords: keywords.slice(0, 100),
   };
 }
