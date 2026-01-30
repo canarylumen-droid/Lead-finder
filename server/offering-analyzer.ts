@@ -40,34 +40,33 @@ export async function analyzeOffering(offering: string): Promise<OfferingAnalysi
 OFFERING: ${offering}
 
 CRITICAL RULES:
-1. Find BUYERS of this service, NOT fellow agencies or competitors
-2. If they sell "lead generation", find businesses that NEED leads (restaurants, dentists, real estate), NOT other lead gen agencies
-3. If they sell "SEO", find businesses that need SEO (local shops, lawyers, clinics), NOT marketing agencies
-4. Find business OWNERS/founders/CEOs who make buying decisions
-5. NO freelancers, NO employees, NO fellow service providers
-6. Focus on NICHE, LOW-COMPETITION keywords that find real buyers
-7. Generate AT LEAST 100 diverse search keywords
+1. Find BUYERS of this service, NOT fellow agencies or competitors.
+2. If the offering is "lead generation" or "SEO", you MUST find businesses that NEED these services (e.g., real estate agents, dentists, roofers, local boutiques, law firms), NOT other marketing/lead gen agencies.
+3. Generate niche, specific business categories that are likely to have a high budget and high need for this service.
+4. For each category, generate at least 20 diverse keywords including job titles (e.g., "Real Estate Agent", "Broker", "Realtor"), business types, and industry-specific terms.
+5. NEVER suggest keywords that are just variations of the offering itself (e.g., if offering is "lead gen", do not suggest "lead gen owner").
+6. Focus on finding business owners/founders/CEOs of target businesses.
+7. Generate AT LEAST 100 diverse search keywords in total across categories.
 
 Think about:
-- What industries need this service?
-- What job titles would buy this?
-- What company types would pay for this?
-- What problems does this solve? Who has those problems?
+- Which local or national businesses have high customer lifetime value and need more leads?
+- What specific niches (e.g., "Luxury Home Realtor", "Implant Dentist") are most profitable?
+- Who are the decision makers in these high-value niches?
 
 Respond in JSON:
 {
-  "summary": "Brief offering summary",
-  "targetAudience": "Who would BUY this",
+  "summary": "Deep analysis of who needs this service and why",
+  "targetAudience": "Specific high-value business niches and decision makers",
   "suggestedLeadTypes": [
     {
-      "category": "Business type that would BUY",
-      "keywords": ["at least 20 specific keywords for this category"],
-      "description": "Why they would buy",
-      "buyerProfile": "Decision maker type",
+      "category": "Specific Niche Business (e.g., High-end Real Estate)",
+      "keywords": ["specific keyword 1", "specific keyword 2", ...],
+      "description": "Detailed explanation of why this specific niche needs the offering right now",
+      "buyerProfile": "Decision maker title and persona",
       "estimatedBudget": "$X-$Y/month"
     }
   ],
-  "searchKeywords": ["MINIMUM 100 diverse, specific, niche keywords - job titles, business types, industries, company names patterns - all potential BUYERS"]
+  "searchKeywords": ["keyword1", "keyword2", ...]
 }`;
 
     const response = await openai.chat.completions.create({
