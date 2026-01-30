@@ -135,7 +135,9 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
   const buyerSuffixes = ['owner', 'founder', 'ceo', 'director', 'manager', 'president', 'managing director'];
   
   // Suggested generic niches if no AI
-  const fallbackNiches = ['Real Estate', 'Dentist', 'Lawyer', 'Construction', 'E-commerce'];
+  const fallbackNiches = meaningfulWords.length > 0 
+    ? meaningfulWords.slice(0, 5).map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    : ['Small Business', 'Startup', 'Enterprise', 'Local Business', 'E-commerce'];
   
   for (const niche of fallbackNiches) {
     for (const suffix of buyerSuffixes.slice(0, 4)) {
@@ -155,15 +157,15 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
   }
 
   return {
-    summary: `Based on your offering of "${offering}", we've identified several high-value business niches that typically require these services to scale. These niches often have high customer lifetime value, making them ideal candidates for your services.`,
-    targetAudience: "Niche-specific business owners and decision makers (Founders, CEOs, Directors)",
+    summary: `Based on your offering of "${offering}", we've identified several potential target niches. These are generated based on the keywords in your description.`,
+    targetAudience: "Business owners and decision makers relevant to your offering",
     suggestedLeadTypes: [
       {
-        category: "High-Value Professional Services",
+        category: fallbackNiches[0] || "Target Audience",
         keywords: keywords.slice(0, 20),
-        description: "Decision makers in professional services industries with high margins and a need for consistent lead flow.",
+        description: "Decision makers identified from your offering keywords.",
         buyerProfile: "Founders, CEOs, business owners",
-        estimatedBudget: "$1,000-$5,000/month"
+        estimatedBudget: "Variable"
       }
     ],
     searchKeywords: keywords.slice(0, 100),
