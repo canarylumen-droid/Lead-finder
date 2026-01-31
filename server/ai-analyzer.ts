@@ -52,15 +52,15 @@ export async function analyzeProfileWithAI(
 
     const prompt = `Quick analysis - would this person BUY this service?
 
-SERVICE: \${offering}
+SERVICE: ${offering}
 
 PROFILE:
-- Name: \${profile.name || profile.username}
-- Title: \${profile.title || 'Unknown'}
-- Company: \${profile.company || 'Unknown'}
-- Bio: \${profile.bio || 'No bio'}
-- Platform: \${profile.platform}
-- Followers: \${profile.followerCount}
+- Name: ${profile.name || profile.username}
+- Title: ${profile.title || 'Unknown'}
+- Company: ${profile.company || 'Unknown'}
+- Bio: ${profile.bio || 'No bio'}
+- Platform: ${profile.platform}
+- Followers: ${profile.followerCount}
 
 RULES:
 1. Is this a BUYER (business owner who needs this service)?
@@ -156,12 +156,12 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
     businessType = 'buyer';
   }
   
-  let context = \`\${name}\`;
-  if (profile.title) context += \`, \${profile.title}\`;
-  context += \`. \`;
+  let context = `${name}`;
+  if (profile.title) context += `, ${profile.title}`;
+  context += `. `;
   
   if (matchCount > 0) {
-    context += \`Matches \${matchCount} industry terms.\`;
+    context += `Matches ${matchCount} industry terms.`;
   }
   
   return {

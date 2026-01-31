@@ -84,6 +84,9 @@ export async function generateKeywordsFromSummary(offering: string, summary: Off
       generationConfig: { responseMimeType: "application/json" }
     });
 
+    const businessTypesStr = summary.businessTypes.map((b, i) => `${i + 1}. ${b}`).join('\n');
+    const painPointsStr = summary.painPoints.map((p, i) => `${i + 1}. ${p}`).join('\n');
+
     const prompt = `Based on this analysis, generate search keywords to find business owners on social media (Instagram/LinkedIn).
 
 ORIGINAL OFFERING: "${offering}"
@@ -94,10 +97,10 @@ ${summary.summary}
 IDEAL BUYERS: ${summary.idealBuyers}
 
 BUSINESS TYPES IDENTIFIED:
-${summary.businessTypes.map((b, i) => \`\${i + 1}. \${b}\`).join('\n')}
+${businessTypesStr}
 
 PAIN POINTS:
-${summary.painPoints.map((p, i) => \`\${i + 1}. \${p}\`).join('\n')}
+${painPointsStr}
 
 Generate 20-30 highly specific search keywords that would help find these business owners on Instagram/LinkedIn.
 
