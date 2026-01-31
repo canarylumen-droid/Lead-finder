@@ -54,13 +54,17 @@ Preferred communication style: Simple, everyday language.
 - Session storage: connect-pg-simple
 
 ## AI Services
-- OpenAI API (standard format for Vercel deployment)
-- Environment variable: OPENAI_API_KEY
+- Gemini API for offering analysis and keyword generation
+- Environment variable: GEMINI_API_KEY
 - Used for: offering analysis, profile analysis, lead qualification scoring, buyer intent detection
 
-## Web Scraping
-- Cheerio for HTML parsing
-- Custom scraper module in server/scraper/
+## Web Scraping (Vercel-Compatible)
+- Cheerio for HTML parsing (no browser binaries needed)
+- Custom Vercel-compatible scraper in server/scrapers/vercel-scraper.ts
+- Google advanced search operators for finding business websites
+- Email filtering: skips no-reply, generic domains (wix, squarespace, etc.)
+- Contact name extraction from email patterns
+- Priority: business emails (contact@, info@, hello@) over personal emails
 
 ## Batch Processing
 - p-limit for concurrency control
