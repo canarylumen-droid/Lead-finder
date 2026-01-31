@@ -1,4 +1,4 @@
-import { scrapeLeads } from "./scrapers/browser-automation";
+import { scrapeLeadsVercel } from "./scrapers/vercel-scraper";
 import type { Express } from "express";
 import type { Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -186,8 +186,8 @@ export async function registerRoutes(
         totalWorkers: 20,
       });
 
-      // Start the job with real scraping (async)
-      scrapeLeads(job.id, platform || 'both', searchKeywords.join(' '), quantity || 50).catch(console.error);
+      // Start the job with Vercel-compatible scraping (async)
+      scrapeLeadsVercel(job.id, searchKeywords, quantity || 50, offering || '').catch(console.error);
 
       res.json({
         message: `Job started. Scraping real profiles with keywords: ${searchKeywords.join(', ')}`,
