@@ -1,14 +1,16 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-let openaiClient: OpenAI | null = null;
+let genAI: GoogleGenerativeAI | null = null;
 
-function getOpenAI(): OpenAI | null {
-  if (!openaiClient && process.env.OPENAI_API_KEY) {
-    openaiClient = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+function getGemini() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return null;
   }
-  return openaiClient;
+  if (!genAI) {
+    genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return genAI;
 }
 
 interface ProfileData {
@@ -30,29 +32,35 @@ interface AnalysisResult {
   reasoning: string;
 }
 
-// Fast parallel AI analysis
 export async function analyzeProfileWithAI(
   profile: ProfileData,
   offering: string
 ): Promise<AnalysisResult> {
   try {
-    const openai = getOpenAI();
-    if (!openai) {
+    const genAIClient = getGemini();
+    if (!genAIClient) {
       return analyzeWithoutAI(profile, offering);
     }
 
-    // Use fast model for quick analysis
+    const model = genAIClient.getGenerativeModel({ 
+      model: "gemini-2.0-flash",
+      generationConfig: { 
+        responseMimeType: "application/json",
+        maxOutputTokens: 200
+      }
+    });
+
     const prompt = `Quick analysis - would this person BUY this service?
 
-SERVICE: ${offering}
+SERVICE: \${offering}
 
 PROFILE:
-- Name: ${profile.name || profile.username}
-- Title: ${profile.title || 'Unknown'}
-- Company: ${profile.company || 'Unknown'}
-- Bio: ${profile.bio || 'No bio'}
-- Platform: ${profile.platform}
-- Followers: ${profile.followerCount}
+- Name: \${profile.name || profile.username}
+- Title: \${profile.title || 'Unknown'}
+- Company: \${profile.company || 'Unknown'}
+- Bio: \${profile.bio || 'No bio'}
+- Platform: \${profile.platform}
+- Followers: \${profile.followerCount}
 
 RULES:
 1. Is this a BUYER (business owner who needs this service)?
@@ -70,30 +78,20 @@ Quick JSON response:
   "reasoning": "Brief reason"
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "Fast lead qualifier. Find BUYERS not competitors. Return JSON only."
-        },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
-      max_completion_tokens: 200,
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      systemInstruction: "Fast lead qualifier. Find BUYERS not competitors. Return JSON only."
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error("No AI response");
-
-    const result = JSON.parse(content) as AnalysisResult;
+    const text = result.response.text();
+    const data = JSON.parse(text) as AnalysisResult;
     
     return {
-      isQualified: result.isQualified ?? false,
-      relevanceScore: Math.min(100, Math.max(0, result.relevanceScore ?? 0)),
-      businessType: result.businessType ?? 'unknown',
-      contextSummary: result.contextSummary ?? '',
-      reasoning: result.reasoning ?? '',
+      isQualified: data.isQualified ?? false,
+      relevanceScore: Math.min(100, Math.max(0, data.relevanceScore ?? 0)),
+      businessType: data.businessType ?? 'unknown',
+      contextSummary: data.contextSummary ?? '',
+      reasoning: data.reasoning ?? '',
     };
   } catch (error: any) {
     console.error("AI analysis error:", error.message);
@@ -101,23 +99,20 @@ Quick JSON response:
   }
 }
 
-// Fast non-AI analysis based on profile data
 function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResult {
   const bio = (profile.bio || '').toLowerCase();
   const title = (profile.title || '').toLowerCase();
   const name = profile.name || profile.username;
   
-  let score = 30; // Base score
+  let score = 30;
   let businessType = 'unknown';
   let isQualified = false;
   
-  // Extract key words from offering to match
   const offeringWords = offering.toLowerCase()
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length > 3);
   
-  // Check for buyer signals
   const buyerSignals = ['owner', 'founder', 'ceo', 'president', 'director', 'head of', 'vp ', 'vice president'];
   const hasBuyerTitle = buyerSignals.some(s => title.includes(s) || bio.includes(s));
   
@@ -126,7 +121,6 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
     businessType = 'buyer';
   }
   
-  // Check for competitor signals (they offer similar services)
   const competitorSignals = ['agency', 'consultant', 'freelancer', 'we help', 'i help', 'services', 'marketing agency', 'digital agency'];
   const isCompetitor = competitorSignals.some(s => bio.includes(s) || title.includes(s));
   
@@ -135,7 +129,6 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
     businessType = 'competitor';
   }
   
-  // Check for freelancer signals
   const freelancerSignals = ['freelance', 'for hire', 'available', 'dm for rates', 'open to work'];
   const isFreelancer = freelancerSignals.some(s => bio.includes(s));
   
@@ -144,7 +137,6 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
     businessType = 'freelancer';
   }
   
-  // Check if bio mentions relevant industry (potential buyer)
   let matchCount = 0;
   for (const word of offeringWords) {
     if (bio.includes(word) || title.includes(word)) {
@@ -153,26 +145,23 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
   }
   score += matchCount * 5;
   
-  // Follower bonus
   if (profile.followerCount >= 10000) score += 10;
   if (profile.followerCount >= 30000) score += 10;
   
-  // Email bonus
   if (profile.email) score += 15;
   
-  // Final qualification
   isQualified = score >= 50 && businessType !== 'competitor' && businessType !== 'freelancer';
   
   if (isQualified && businessType === 'unknown') {
     businessType = 'buyer';
   }
   
-  let context = `${name}`;
-  if (profile.title) context += `, ${profile.title}`;
-  context += `. `;
+  let context = \`\${name}\`;
+  if (profile.title) context += \`, \${profile.title}\`;
+  context += \`. \`;
   
   if (matchCount > 0) {
-    context += `Matches ${matchCount} industry terms.`;
+    context += \`Matches \${matchCount} industry terms.\`;
   }
   
   return {
@@ -184,15 +173,12 @@ function analyzeWithoutAI(profile: ProfileData, offering: string): AnalysisResul
   };
 }
 
-// Batch analyze multiple profiles in parallel (fast)
 export async function batchAnalyzeProfiles(
   profiles: ProfileData[],
   offering: string,
   concurrency: number = 10
 ): Promise<Map<string, AnalysisResult>> {
   const results = new Map<string, AnalysisResult>();
-  
-  // Process in parallel batches
   const batches: ProfileData[][] = [];
   for (let i = 0; i < profiles.length; i += concurrency) {
     batches.push(profiles.slice(i, i + concurrency));
@@ -203,19 +189,16 @@ export async function batchAnalyzeProfiles(
       const result = await analyzeProfileWithAI(profile, offering);
       results.set(profile.username, result);
     });
-    
     await Promise.all(promises);
   }
   
   return results;
 }
 
-// Extract business email from website URL
 export async function extractEmailFromWebsite(url: string): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -223,45 +206,21 @@ export async function extractEmailFromWebsite(url: string): Promise<string | nul
       }
     });
     clearTimeout(timeout);
-    
     if (!response.ok) return null;
-    
     const html = await response.text();
-    
-    // Find all emails in HTML
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const matches = html.match(emailRegex) || [];
-    
-    // Filter out common non-business emails
     const validEmails = matches.filter(email => {
       const lower = email.toLowerCase();
-      return !lower.includes('example.com') &&
-             !lower.includes('test.com') &&
-             !lower.includes('noreply') &&
-             !lower.includes('no-reply') &&
-             !lower.includes('donotreply') &&
-             !lower.includes('@sentry') &&
-             !lower.includes('@wix.com') &&
-             !lower.includes('@squarespace') &&
-             !lower.includes('@wordpress') &&
-             !lower.includes('@shopify') &&
-             !lower.includes('.png') &&
-             !lower.includes('.jpg') &&
-             !lower.includes('.gif');
+      return !lower.includes('example.com') && !lower.includes('test.com') && !lower.includes('noreply');
     });
-    
-    // Prefer contact/info/hello emails
-    const preferred = validEmails.find(e => 
-      e.includes('contact') || e.includes('info') || e.includes('hello') || e.includes('support')
-    );
-    
+    const preferred = validEmails.find(e => e.includes('contact') || e.includes('info') || e.includes('hello'));
     return preferred || validEmails[0] || null;
   } catch {
     return null;
   }
 }
 
-// Check if AI is available
 export function hasAICapability(): boolean {
-  return !!process.env.OPENAI_API_KEY;
+  return !!process.env.GEMINI_API_KEY;
 }

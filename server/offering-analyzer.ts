@@ -1,14 +1,16 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-let openaiClient: OpenAI | null = null;
+let genAI: GoogleGenerativeAI | null = null;
 
-function getOpenAI(): OpenAI | null {
-  if (!openaiClient && process.env.OPENAI_API_KEY) {
-    openaiClient = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+function getGemini() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return null;
   }
-  return openaiClient;
+  if (!genAI) {
+    genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return genAI;
 }
 
 export interface OfferingSummary {
@@ -22,15 +24,18 @@ export interface KeywordResult {
   keywords: string[];
 }
 
-// Step 1: Analyze offering and create a full summary of ideal buyers
 export async function analyzeOffering(offering: string): Promise<OfferingSummary> {
-  const openai = getOpenAI();
-  
-  if (!openai) {
-    throw new Error("OpenAI API key is required for analysis");
+  const genAIClient = getGemini();
+  if (!genAIClient) {
+    throw new Error("GEMINI_API_KEY is required for analysis");
   }
 
   try {
+    const model = genAIClient.getGenerativeModel({ 
+      model: "gemini-2.0-flash",
+      generationConfig: { responseMimeType: "application/json" }
+    });
+    
     const prompt = `You are a B2B sales strategist. A user sells this service/product:
 
 "${offering}"
@@ -54,38 +59,31 @@ Respond in JSON:
   "painPoints": ["Pain point 1 that this offering solves", "Pain point 2", "..."]
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You identify BUYERS for services. Focus on businesses that NEED the service being offered, not competitors. Provide detailed, specific analysis."
-        },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      systemInstruction: "You identify BUYERS for services. Focus on businesses that NEED the service being offered, not competitors. Provide detailed, specific analysis."
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error("No response from AI");
-
-    const result = JSON.parse(content) as OfferingSummary;
-    return result;
+    const text = result.response.text();
+    return JSON.parse(text) as OfferingSummary;
   } catch (error: any) {
     console.error("Offering analysis error:", error.message);
-    throw new Error("Failed to analyze offering. Please ensure OpenAI is configured.");
+    throw new Error("Failed to analyze offering. Please ensure GEMINI_API_KEY is configured.");
   }
 }
 
-// Step 2: Generate search keywords from the summary
 export async function generateKeywordsFromSummary(offering: string, summary: OfferingSummary): Promise<KeywordResult> {
-  const openai = getOpenAI();
-  
-  if (!openai) {
-    throw new Error("OpenAI API key is required");
+  const genAIClient = getGemini();
+  if (!genAIClient) {
+    throw new Error("GEMINI_API_KEY is required");
   }
 
   try {
+    const model = genAIClient.getGenerativeModel({ 
+      model: "gemini-2.0-flash",
+      generationConfig: { responseMimeType: "application/json" }
+    });
+
     const prompt = `Based on this analysis, generate search keywords to find business owners on social media (Instagram/LinkedIn).
 
 ORIGINAL OFFERING: "${offering}"
@@ -96,10 +94,10 @@ ${summary.summary}
 IDEAL BUYERS: ${summary.idealBuyers}
 
 BUSINESS TYPES IDENTIFIED:
-${summary.businessTypes.map((b, i) => `${i + 1}. ${b}`).join('\n')}
+${summary.businessTypes.map((b, i) => \`\${i + 1}. \${b}\`).join('\n')}
 
 PAIN POINTS:
-${summary.painPoints.map((p, i) => `${i + 1}. ${p}`).join('\n')}
+${summary.painPoints.map((p, i) => \`\${i + 1}. \${p}\`).join('\n')}
 
 Generate 20-30 highly specific search keywords that would help find these business owners on Instagram/LinkedIn.
 
@@ -116,17 +114,9 @@ Respond in JSON:
   "keywords": ["keyword1", "keyword2", "..."]
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error("No response from AI");
-
-    const result = JSON.parse(content) as KeywordResult;
-    return result;
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    return JSON.parse(text) as KeywordResult;
   } catch (error: any) {
     console.error("Keyword generation error:", error.message);
     throw new Error("Failed to generate keywords");
