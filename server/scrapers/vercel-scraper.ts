@@ -20,7 +20,8 @@ const SKIP_EMAIL_PATTERNS = [
   'mailer-daemon', 'postmaster', 'admin@', 'root@', 'webmaster',
   'abuse@', 'spam@', 'support@wix', 'support@squarespace', 'support@wordpress',
   'example.com', 'test.com', 'domain.com', 'email.com', 'mail.com',
-  'sentry.io', 'github.com', 'gitlab.com', 'bitbucket.org'
+  'sentry.io', 'github.com', 'gitlab.com', 'bitbucket.org',
+  'hiring', 'career', 'job', 'hr@', 'recruitment'
 ];
 
 const SKIP_DOMAINS = [
@@ -151,7 +152,9 @@ function prioritizeEmails(emails: string[]): string[] {
       score += 5;
     }
     
-    if (!lower.includes('gmail.com') && !lower.includes('yahoo.com') && !lower.includes('hotmail.com') && !lower.includes('outlook.com')) {
+    if (lower.includes('gmail.com')) {
+      score += 15; // Focus more on Gmail as requested
+    } else if (!lower.includes('yahoo.com') && !lower.includes('hotmail.com') && !lower.includes('outlook.com')) {
       score += 8;
     }
     
@@ -318,11 +321,12 @@ async function googleSearch(query: string): Promise<string[]> {
 function buildGoogleQueries(keywords: string[]): string[] {
   const queries: string[] = [];
   
-  for (const keyword of keywords.slice(0, 10)) {
-    queries.push(`"${keyword}" "email" "contact" -site:linkedin.com -site:facebook.com`);
-    queries.push(`"${keyword}" "@gmail.com" OR "@" site:.com`);
-    queries.push(`"${keyword}" owner founder CEO contact`);
-    queries.push(`"${keyword}" business "team" OR "about us" email`);
+  // Use more keywords to cast a wider net
+  for (const keyword of keywords.slice(0, 20)) {
+    queries.push(`"${keyword}" "@gmail.com" -site:linkedin.com -site:facebook.com`);
+    queries.push(`"${keyword}" "contact" "email" site:.com`);
+    queries.push(`"${keyword}" owner OR founder OR CEO "@gmail.com"`);
+    queries.push(`"${keyword}" "about us" "@gmail.com"`);
   }
   
   return queries;
