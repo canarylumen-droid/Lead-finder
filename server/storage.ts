@@ -39,10 +39,12 @@ export class DatabaseStorage implements IStorage {
     // Check for duplicate
     const isDuplicate = await this.checkDuplicate(insertLead.dedupeHash);
     if (isDuplicate) {
+      console.log(`[Storage] Skipping duplicate lead: ${insertLead.email} - ${insertLead.dedupeHash}`);
       return null;
     }
     
     try {
+      console.log(`[Storage] Creating lead: ${insertLead.email}`);
       const [lead] = await db.insert(leads).values(insertLead).returning();
       // Track the hash
       await db.insert(dedupeHashes).values({
@@ -51,6 +53,7 @@ export class DatabaseStorage implements IStorage {
       }).onConflictDoNothing();
       return lead;
     } catch (error: any) {
+      console.error(`[Storage] Create lead error:`, error);
       // Handle unique constraint violation
       if (error.code === '23505') {
         return null;
