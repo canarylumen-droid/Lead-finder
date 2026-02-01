@@ -6,26 +6,19 @@ import vanillaPuppeteer from 'puppeteer-core';
 
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
-async function runHighSpeedScrape() {
-    console.log('⚡ Starting High-Speed Lead Generation Target: 500 Total Leads');
+async function runTurboScrape() {
+    console.log('🚀 Starting TURBO Lead Generation Target: 500 Total Leads');
+    console.log('🎯 Focus: MedSpas, Property Management, Event Venues, Equipment Rentals');
 
     const niches = [
-        'Roofing Contractor',
-        'Water Damage Restoration',
-        'HVAC Repair',
-        'Emergency Plumber',
-        'Landscaping Service',
-        'Tree Removal Service',
-        'Personal Injury Lawyer',
         'MedSpa Botox',
         'Medical Aesthetics',
-        'Auto Detail Shop',
-        'Auto Repair Shop',
+        'CoolSculpting MedSpa',
+        'Commercial Property Management',
+        'Apartment Leasing Office',
         'Wedding Venue',
         'Event Space Rental',
-        'Equipment Rental Service',
-        'Commercial Property Management',
-        'Apartment Leasing Office'
+        'Equipment Rental Service'
     ];
 
     const locations = [
@@ -41,7 +34,9 @@ async function runHighSpeedScrape() {
         'San Diego County, CA',
         'Clark County, NV',
         'Hillsborough County, FL',
-        'Wayne County, MI'
+        'Wayne County, MI',
+        'Oakland County, MI',
+        'Franklin County, OH'
     ];
 
     const getExistingNames = () => {
@@ -55,20 +50,18 @@ async function runHighSpeedScrape() {
     };
 
     let existingNames = getExistingNames();
-    console.log(`📊 Initial leads count: ${existingNames.size - 1}`);
+    console.log(`📊 Current unique leads in file: ${existingNames.size - 1}`);
 
     const target = 500;
-    let leadsFound = existingNames.size - 1; // Subtract header
+    let leadsFound = existingNames.size - 1;
 
-    const launchBrowser = async () => {
-        return await vanillaPuppeteer.launch({
-            executablePath: CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
-        });
-    };
+    const browser = await vanillaPuppeteer.launch({
+        executablePath: CHROME_PATH,
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+    });
 
-    let browser = await launchBrowser();
+    const concurrency = 5;
 
     for (const location of locations) {
         if (leadsFound >= target) break;
@@ -77,50 +70,44 @@ async function runHighSpeedScrape() {
             if (leadsFound >= target) break;
 
             const query = `${niche} in ${location}`;
-            console.log(`\n🔎 [Query]: ${query} (Progress: ${leadsFound}/${target})`);
+            console.log(`\n🔎 [Query]: ${query} (${leadsFound}/${target})`);
 
             try {
-                const leads = await scrapeGoogleMaps([query], 100, (m) => console.log(`   ${m}`));
+                const leads = await scrapeGoogleMaps([query], 50, (m) => console.log(`   ${m}`));
 
-                for (const lead of leads) {
+                const newVisibleLeads = leads.filter(l => !existingNames.has(l.name));
+
+                for (let i = 0; i < newVisibleLeads.length; i += concurrency) {
                     if (leadsFound >= target) break;
-                    if (existingNames.has(lead.name)) continue;
 
-                    if (lead.website) {
-                        try {
-                            const emails = await findEmailsOnWebsite(lead.website, browser);
+                    const batch = newVisibleLeads.slice(i, i + concurrency);
+                    await Promise.all(batch.map(async (lead) => {
+                        if (lead.website) {
+                            const emails = await findEmailsOnWebsite(lead.website, browser).catch(() => []);
                             if (emails.length > 0) {
-                                lead.email = emails[0];
-                            }
-                        } catch (e: any) {
-                            if (e.message.includes('Connection closed')) {
-                                console.log('   ⚠️ Browser connection closed. Restarting...');
-                                await browser.close().catch(() => { });
-                                browser = await launchBrowser();
+                                // Prioritize Gmail if present
+                                const gmail = emails.find(e => e.includes('gmail.com'));
+                                lead.email = gmail || emails[0];
                             }
                         }
-                    }
 
-                    const csvLine = `"${lead.name}","${lead.phone || ''}","${lead.website || ''}","${lead.address || ''}","${lead.rating || ''}","${lead.reviews || ''}","${lead.query}","${lead.url}","${lead.email || ''}"\n`;
-                    fs.appendFileSync('leads_with_emails.csv', csvLine);
-                    existingNames.add(lead.name);
-                    leadsFound++;
-                    console.log(`   🚀 #${leadsFound}: ${lead.name} ${lead.email ? `[${lead.email}]` : ''}`);
+                        if (lead.email) {
+                            const csvLine = `"${lead.name}","${lead.phone || ''}","${lead.website || ''}","${lead.address || ''}","${lead.rating || ''}","${lead.reviews || ''}","${lead.query}","${lead.url}","${lead.email || ''}"\n`;
+                            fs.appendFileSync('leads_with_emails.csv', csvLine);
+                            existingNames.add(lead.name);
+                            leadsFound++;
+                            console.log(`   🚀 #${leadsFound}: ${lead.name} [${lead.email}]`);
+                        }
+                    }));
                 }
             } catch (err: any) {
-                console.error(`   ❌ Error processing query: ${err.message}`);
-                if (err.message.includes('Connection closed')) {
-                    await browser.close().catch(() => { });
-                    browser = await launchBrowser();
-                }
+                console.error(`   ❌ Query Error: ${err.message}`);
             }
         }
     }
 
     await browser.close();
-    console.log(`\n✅ Finished: Reached ${leadsFound} leads.`);
+    console.log(`\n🎉 Goal Reached: ${leadsFound} leads.`);
 }
 
-runHighSpeedScrape().catch(async (e) => {
-    console.error('CRITICAL ERROR:', e);
-});
+runTurboScrape().catch(console.error);
