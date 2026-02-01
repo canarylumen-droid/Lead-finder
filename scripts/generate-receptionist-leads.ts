@@ -52,10 +52,14 @@ async function generateAIReceptionistKeywords() {
   });
 
   console.log(`Starting scrape job ${job.id} for 500 leads...`);
-  // This will run in the background via the worker pool logic in scrapeLeadsVercel
-  scrapeLeadsVercel(job.id, keywords, 500, offering).catch(console.error);
+  // Ensure the job is actually processed
+  try {
+    await scrapeLeadsVercel(job.id, keywords, 500, offering);
+  } catch (err) {
+    console.error("Scrape execution error:", err);
+  }
   
-  console.log("Job execution initiated. Check the dashboard for real-time progress.");
+  console.log("Job execution completed. Check the database.");
 }
 
 generateAIReceptionistKeywords().catch(console.error);
