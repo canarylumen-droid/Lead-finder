@@ -102,7 +102,7 @@ ${businessTypesStr}
 PAIN POINTS:
 ${painPointsStr}
 
-Generate 20-30 highly specific search keywords that would help find these business owners on Instagram/LinkedIn.
+Generate exactly 100 highly specific search keywords that would help find these business owners on Instagram/LinkedIn.
 
 RULES:
 1. Keywords should find the BUSINESS OWNERS of the types identified above
@@ -111,6 +111,8 @@ RULES:
 4. DO NOT include generic terms like "entrepreneur" or "small business owner"
 5. DO NOT include terms related to the SERVICE being sold - we're finding BUYERS
 6. Each keyword should be 2-4 words max
+7. Focus on low-competition, high-intent buyers (small to medium businesses).
+8. Avoid social media fluff and broad AI hype. Focus on practical needs.
 
 Respond in JSON:
 {
