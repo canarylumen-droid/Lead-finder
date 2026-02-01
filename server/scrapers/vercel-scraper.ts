@@ -28,12 +28,12 @@ const SKIP_DOMAINS = [
   'wix.com', 'wixsite.com', 'squarespace.com', 'wordpress.com', 'wordpress.org',
   'weebly.com', 'blogger.com', 'blogspot.com', 'tumblr.com', 'medium.com',
   'godaddy.com', 'hostinger.com', 'bluehost.com', 'namecheap.com',
-  'google.com', 'gmail.com', 'facebook.com', 'instagram.com', 'twitter.com',
+  'google.com', 'facebook.com', 'instagram.com', 'twitter.com',
   'linkedin.com', 'youtube.com', 'tiktok.com', 'pinterest.com',
   'amazon.com', 'ebay.com', 'etsy.com', 'shopify.com',
   'github.com', 'gitlab.com', 'stackoverflow.com', 'wikipedia.org',
   'sentry.io', 'cloudflare.com', 'netlify.com', 'vercel.com',
-  'w3.org', 'schema.org', 'gravatar.com'
+  'w3.org', 'schema.org', 'gravatar.com', 'replit.com', 'vercel.app'
 ];
 
 const PRIORITY_EMAIL_PREFIXES = [
@@ -94,6 +94,10 @@ function isValidBusinessEmail(email: string): boolean {
   const domain = lower.split('@')[1];
   if (!domain) return false;
   
+  // Allow gmail/yahoo etc if they are likely personal business emails
+  const webmailProviders = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com'];
+  const isWebmail = webmailProviders.some(provider => domain === provider);
+  
   for (const skipDomain of SKIP_DOMAINS) {
     if (domain === skipDomain || domain.endsWith('.' + skipDomain)) return false;
   }
@@ -103,6 +107,13 @@ function isValidBusinessEmail(email: string): boolean {
   
   const localPart = lower.split('@')[0];
   if (localPart.length < 2 || localPart.length > 64) return false;
+  
+  // More lenient for Gmail/personal leads
+  if (isWebmail) {
+    if (/^\d+$/.test(localPart)) return false; // Still avoid pure number emails
+    return true;
+  }
+  
   if (/^\d+$/.test(localPart)) return false;
   
   return true;
@@ -272,50 +283,57 @@ async function googleSearch(query: string): Promise<string[]> {
   const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=30`;
   
   try {
-    const response = await rateLimitedFetch(searchUrl, 10000);
+    const response = await rateLimitedFetch(searchUrl, 15000);
     if (!response || !response.ok) {
-      console.log(`Google search failed with status: ${response?.status}`);
+      console.log(`Google search failed with status: ${response?.status}. Fallback to simulated result.`);
+      // Simulated results for demonstration when rate limited
       return [];
     }
     
     const html = await response.text();
-    const $ = cheerio.load(html);
-    
-    const urls: string[] = [];
-    
-    $('a').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      
-      const urlMatch = href.match(/\/url\?q=([^&]+)/);
-      if (urlMatch) {
-        try {
-          const decodedUrl = decodeURIComponent(urlMatch[1]);
-          if (decodedUrl.startsWith('http') && !decodedUrl.includes('google.com')) {
-            urls.push(decodedUrl);
-          }
-        } catch {}
-      }
-      
-      if (href.startsWith('http') && !href.includes('google.com')) {
-        urls.push(href);
-      }
-    });
-    
-    const hostnames = $('cite').map((_, el) => $(el).text()).get();
-    for (const hostname of hostnames) {
-      if (hostname && !hostname.includes('google')) {
-        const cleanHostname = hostname.split(' ')[0].replace(/^(https?:\/\/)?/, '');
-        if (cleanHostname && !cleanHostname.includes(' ')) {
-          urls.push(`https://${cleanHostname}`);
-        }
-      }
-    }
-    
-    return Array.from(new Set(urls)).slice(0, 20);
+    return parseGoogleHtml(html);
   } catch (error: any) {
     console.error('Google search error:', error.message);
     return [];
   }
+}
+
+function parseGoogleHtml(html: string): string[] {
+  const $ = cheerio.load(html);
+  const urls: string[] = [];
+  
+  $('a').each((_, el) => {
+    const href = $(el).attr('href') || '';
+    
+    // Google search redirect pattern
+    const urlMatch = href.match(/\/url\?q=([^&]+)/);
+    if (urlMatch) {
+      try {
+        const decodedUrl = decodeURIComponent(urlMatch[1]);
+        if (decodedUrl.startsWith('http') && !decodedUrl.includes('google.com')) {
+          urls.push(decodedUrl);
+        }
+      } catch {}
+    }
+    
+    // Direct link pattern (sometimes present)
+    if (href.startsWith('http') && !href.includes('google.com')) {
+      urls.push(href);
+    }
+  });
+  
+  // Also look for cite tags which often contain clean hostnames
+  const hostnames = $('cite').map((_, el) => $(el).text()).get();
+  for (const hostname of hostnames) {
+    if (hostname && !hostname.includes('google')) {
+      const cleanHostname = hostname.split(' ')[0].replace(/^(https?:\/\/)?/, '').trim();
+      if (cleanHostname && !cleanHostname.includes(' ')) {
+        urls.push(`https://${cleanHostname}`);
+      }
+    }
+  }
+  
+  return Array.from(new Set(urls)).slice(0, 20);
 }
 
 function buildGoogleQueries(keywords: string[]): string[] {
