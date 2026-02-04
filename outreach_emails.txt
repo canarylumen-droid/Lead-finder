@@ -1,0 +1,87 @@
+
+# COLD EMAIL SCRIPTS: "THE AUTHORITY ARCHITECTS"
+# Files for Audnix / Instantly
+
+---
+
+## CAMPAIGN A: "THE REVAMP" (For Low Visibility Leads)
+# Target: Has website, but < 20 reviews or bad design.
+# Goal: Sell "Premium Positioning" ($300-$500).
+
+**Email 1 (The Hook):**
+Subject: your website / premium clients?
+
+Hi {{firstName}},
+
+I found your business while researching top-rated {{niche}} in {{location}}.
+
+I noticed you have a few great reviews, but your current website doesn't really reflect the "Premium" quality of work I assume you do.
+
+In my experience, an outdated site pushes away high-ticket clients and attracts "price shoppers" who just want the cheapest deal.
+
+I actually mocked up a "Premium" version of your homepage that helps position you as the #1 authority in {{location}}.
+
+Mind if I send the video breakdown over?
+
+Best,
+[Your Name]
+
+**Follow-Up 1 (2 Days Later):**
+Subject: Re: your website / premium clients?
+
+Did you catch my last note, {{firstName}}?
+
+I promise I'm not trying to sell you generic SEO. We prefer to just help expert {{niche}} pros look like the Market Leaders they actually are.
+
+Happy to send that example over if you're open to it?
+
+Best,
+[Your Name]
+
+**Follow-Up 2 (4 Days Later):**
+Subject: quick question
+
+One last idea—if you're happy with your current lead volume, I totally get it.
+
+But if you ever decide you want to attract higher-paying jobs (instead of just more jobs), let's chat.
+
+I'll leave you to it!
+
+Best,
+[Your Name]
+
+---
+
+## CAMPAIGN B: "THE GHOST" (For No-Website Leads)
+# Target: NO Website found.
+# Goal: Sell "Instant Authority" Site ($300).
+
+**Email 1 (The Discovery):**
+Subject: Question for {{companyName}}
+
+Hi {{firstName}},
+
+I found your business on Google Maps while looking for a {{niche}} in {{location}}, but I couldn't find your website.
+
+Are you fully booked right now, or are you open to taking on more clients?
+
+I actually built a quick demo of what a "High-Trust" site could look like for you (it helps customers verify you before they call).
+
+Mind if I send the video over?
+
+Best,
+[Your Name]
+
+**Follow-Up 1 (2 Days Later):**
+Subject: Re: Question for {{companyName}}
+
+Just checking in on this? I promise I’m not trying to be a pest.
+
+I just hate seeing solid local businesses lose leads to competitors solely because they "look" more established online.
+
+Let me know if you want to see that demo?
+
+Best,
+[Your Name]
+
+---

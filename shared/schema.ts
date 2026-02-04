@@ -67,9 +67,9 @@ export const dedupeHashes = pgTable("dedupe_hashes", {
 });
 
 // Insert schemas
-export const insertLeadSchema = createInsertSchema(leads).omit({ 
-  id: true, 
-  scrapedAt: true 
+export const insertLeadSchema = createInsertSchema(leads).omit({
+  id: true,
+  scrapedAt: true
 });
 
 export const insertScrapeJobSchema = createInsertSchema(scrapeJobs).omit({

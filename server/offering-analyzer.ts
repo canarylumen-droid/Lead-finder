@@ -26,9 +26,48 @@ export interface OfferingAnalysis {
   searchKeywords: string[];
 }
 
+import { GeminiClient } from "./gemini-client";
+
 export async function analyzeOffering(offering: string): Promise<OfferingAnalysis> {
+  // Try Gemini First
+  const gemini = GeminiClient.getInstance();
+  if (gemini) {
+    console.log("Using Gemini for Offering Analysis...");
+    try {
+      const prompt = `You are a B2B sales expert. Analyze this business offering and determine who would most likely buy it.
+
+OFFERING: ${offering}
+
+Identify 3-5 specific types of leads who would:
+1. Actually need this service/product
+2. Have budget to pay for it (not freelancers, but businesses with revenue)
+3. Be decision makers who can say yes
+
+For each lead type, provide:
+- Category name (e.g., "Marketing Agency Owners", "E-commerce Brand Founders")
+- Search keywords to find them on Instagram/LinkedIn (specific, low competition)
+- Brief description of why they'd buy
+- Typical buyer profile
+- Estimated budget range
+
+IMPORTANT: Keywords must be SPECIFIC to this exact offering. No generic terms.
+Find niche keywords with low competition that match this exact business.
+
+Respond in JSON only with: { summary, targetAudience, suggestedLeadTypes: [{category, keywords[], description, buyerProfile, estimatedBudget}], searchKeywords[] }`;
+
+      const analysis = await gemini.generateJSON<OfferingAnalysis>(prompt);
+
+      // Verify keywords with Second Gemini Call
+      const verified = await verifyKeywords(analysis.searchKeywords, offering);
+      analysis.searchKeywords = verified;
+
+      return analysis;
+    } catch (e) {
+      console.error("Gemini Analysis Failed:", e);
+    }
+  }
+
   const openai = getOpenAI();
-  
   if (!openai) {
     // No AI available - extract keywords directly from user input
     return extractKeywordsFromOffering(offering);
@@ -87,7 +126,7 @@ Respond in JSON:
     if (!content) throw new Error("No response from AI");
 
     const analysis = JSON.parse(content) as OfferingAnalysis;
-    
+
     // Verify keywords with second AI call
     const verified = await verifyKeywords(analysis.searchKeywords, offering);
     analysis.searchKeywords = verified;
@@ -101,6 +140,15 @@ Respond in JSON:
 
 // Second AI agent verifies the keywords are good fit
 async function verifyKeywords(keywords: string[], offering: string): Promise<string[]> {
+  const gemini = GeminiClient.getInstance();
+  if (gemini) {
+    try {
+      const prompt = `Offering: ${offering}\n\nProposed keywords: ${keywords.join(', ')}\n\nVerify these keywords are:\n1. Specific to this exact offering (not generic)\n2. Low competition\n3. Will find real buyers\n\nReturn JSON: { "verified": ["keyword1", "keyword2"] }\n\nRemove any generic keywords. Add better ones if needed.`;
+      const result = await gemini.generateJSON<{ verified: string[] }>(prompt);
+      if (result.verified && result.verified.length > 0) return result.verified;
+    } catch (e) { }
+  }
+
   const openai = getOpenAI();
   if (!openai) return keywords;
 
@@ -131,7 +179,7 @@ async function verifyKeywords(keywords: string[], offering: string): Promise<str
   } catch (e) {
     console.error("Keyword verification failed:", e);
   }
-  
+
   return keywords;
 }
 
@@ -142,15 +190,15 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length > 3);
-  
+
   // Remove common stop words
   const stopWords = ['that', 'this', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'them', 'what', 'when', 'where', 'which', 'while', 'about', 'after', 'before', 'between', 'into', 'through', 'during', 'above', 'below', 'more', 'most', 'other', 'some', 'such', 'only', 'same', 'than', 'very', 'just', 'also', 'provide', 'help', 'need', 'want', 'make', 'like', 'service', 'services'];
-  
+
   const meaningfulWords = words.filter(w => !stopWords.includes(w));
-  
+
   // Create keyword combinations from the user's actual text
   const keywords: string[] = [];
-  
+
   // Take pairs of meaningful words
   for (let i = 0; i < meaningfulWords.length - 1 && keywords.length < 6; i++) {
     const pair = `${meaningfulWords[i]} ${meaningfulWords[i + 1]}`;
@@ -158,7 +206,7 @@ function extractKeywordsFromOffering(offering: string): OfferingAnalysis {
       keywords.push(pair);
     }
   }
-  
+
   // Add single meaningful words if we don't have enough
   for (const word of meaningfulWords.slice(0, 4)) {
     if (!keywords.some(k => k.includes(word))) {
