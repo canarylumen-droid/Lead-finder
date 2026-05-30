@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { router } from "./routes.js";
+import { setupWebSocketServer } from "./websocket.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,6 +34,9 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 (async () => {
+  // WebSocket server (same HTTP server, path /ws)
+  setupWebSocketServer(httpServer);
+
   if (process.env.NODE_ENV === "production") {
     const { serveStatic } = await import("./static.js");
     serveStatic(app);

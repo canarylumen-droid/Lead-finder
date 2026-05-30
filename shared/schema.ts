@@ -2,7 +2,7 @@ import { pgTable, text, serial, integer, timestamp, uniqueIndex } from "drizzle-
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// ── Users ────────────────────────────────────────────────────────────────────
+// ── Users ─────────────────────────────────────────────────────────────────────
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").notNull().unique(),
@@ -18,25 +18,22 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export const scrapeSessions = pgTable("scrape_sessions", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
-  niches: text("niches").notNull(),        // JSON-encoded string[]
-  cities: text("cities").notNull(),         // JSON-encoded string[]
+  niches: text("niches").notNull(),         // JSON string[]
+  cities: text("cities").notNull(),          // JSON string[]
   country: text("country").notNull(),
   maxReviews: integer("max_reviews").notNull().default(40),
   targetVolume: integer("target_volume").notNull().default(500),
-  status: text("status").notNull().default("running"), // running | completed | failed
+  status: text("status").notNull().default("running"),
   leadsCount: integer("leads_count").notNull().default(0),
+  emailCount: integer("email_count").notNull().default(0),
   errorMessage: text("error_message"),
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
 });
 
 export const insertSessionSchema = createInsertSchema(scrapeSessions).omit({
-  id: true,
-  startedAt: true,
-  completedAt: true,
-  status: true,
-  leadsCount: true,
-  errorMessage: true,
+  id: true, startedAt: true, completedAt: true,
+  status: true, leadsCount: true, emailCount: true, errorMessage: true,
 });
 export type ScrapeSession = typeof scrapeSessions.$inferSelect;
 export type InsertSession = z.infer<typeof insertSessionSchema>;
@@ -56,10 +53,11 @@ export const leads = pgTable("leads", {
   reviewsCount: integer("reviews_count"),
   address: text("address"),
   email: text("email"),
+  emailVerified: integer("email_verified").default(0), // 0=unknown 1=has_mx 2=no_mx
   mapsUrl: text("maps_url"),
   scrapedAt: timestamp("scraped_at").defaultNow(),
 }, (t) => ({
-  sessionIdx: uniqueIndex("leads_session_name_idx").on(t.sessionId, t.name, t.city),
+  sessionIdx: uniqueIndex("leads_session_name_city_idx").on(t.sessionId, t.name, t.city),
 }));
 
 export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, scrapedAt: true });
@@ -71,7 +69,7 @@ export const launchSessionSchema = z.object({
   niches: z.array(z.string().min(1)).min(1),
   cities: z.array(z.string().min(1)).min(1),
   country: z.string().min(1),
-  maxReviews: z.number().int().min(1).max(10000).default(40),
-  targetVolume: z.number().int().min(1).max(50000).default(500),
+  maxReviews: z.number().int().min(1).max(100000).default(40),
+  targetVolume: z.number().int().min(1).max(100000).default(500),
 });
 export type LaunchSessionInput = z.infer<typeof launchSessionSchema>;

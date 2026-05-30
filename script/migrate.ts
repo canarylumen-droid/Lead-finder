@@ -1,7 +1,6 @@
 import pg from "pg";
 
 const { Pool } = pg;
-
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const sql = `
@@ -29,10 +28,12 @@ CREATE TABLE scrape_sessions (
   target_volume INTEGER NOT NULL DEFAULT 500,
   status TEXT NOT NULL DEFAULT 'running',
   leads_count INTEGER NOT NULL DEFAULT 0,
+  email_count INTEGER NOT NULL DEFAULT 0,
   error_message TEXT,
   started_at TIMESTAMP DEFAULT NOW(),
   completed_at TIMESTAMP
 );
+CREATE INDEX idx_sessions_user ON scrape_sessions(user_id);
 
 CREATE TABLE leads (
   id SERIAL PRIMARY KEY,
@@ -48,14 +49,14 @@ CREATE TABLE leads (
   reviews_count INTEGER,
   address TEXT,
   email TEXT,
+  email_verified INTEGER DEFAULT 0,
   maps_url TEXT,
   scraped_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(session_id, name, city)
 );
-
 CREATE INDEX idx_leads_session ON leads(session_id);
 CREATE INDEX idx_leads_user ON leads(user_id);
-CREATE INDEX idx_sessions_user ON scrape_sessions(user_id);
+CREATE INDEX idx_leads_session_scraped ON leads(session_id, scraped_at DESC);
 `;
 
 async function main() {
@@ -64,7 +65,4 @@ async function main() {
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().catch((err) => { console.error(err); process.exit(1); });
