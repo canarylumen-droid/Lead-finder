@@ -16,7 +16,6 @@ export default function Login({ onLogin }: Props) {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       const endpoint = isRegister ? "/api/auth/register" : "/api/auth/login";
       const res = await fetch(endpoint, {
@@ -25,15 +24,10 @@ export default function Login({ onLogin }: Props) {
         body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.message || "Something went wrong");
-        return;
-      }
-
+      if (!res.ok) { setError(data.message || "Something went wrong"); return; }
       onLogin(data.user);
     } catch {
-      setError("Backend not connected yet — coming soon");
+      setError("Cannot reach server. Make sure the app is running.");
     } finally {
       setLoading(false);
     }
@@ -50,11 +44,10 @@ export default function Login({ onLogin }: Props) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">LeadGen Pro</h1>
+          <h1 className="text-2xl font-bold text-white">Lead Finder</h1>
           <p className="text-[hsl(var(--muted-foreground))] text-sm mt-1">Google Maps Lead Scraper</p>
         </div>
 
-        {/* Card */}
         <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-2xl p-8">
           <h2 className="text-lg font-semibold text-white mb-1">
             {isRegister ? "Create your account" : "Welcome back"}
@@ -65,9 +58,7 @@ export default function Login({ onLogin }: Props) {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">
-                Email
-              </label>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">Email</label>
               <input
                 data-testid="input-email"
                 type="email"
@@ -78,11 +69,8 @@ export default function Login({ onLogin }: Props) {
                 className="w-full px-3.5 py-2.5 bg-[hsl(var(--muted))] border border-[hsl(var(--border))] rounded-lg text-white placeholder-[hsl(var(--muted-foreground))] text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring)/0.5)] focus:border-[hsl(var(--primary))] transition"
               />
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">
-                Password
-              </label>
+              <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-1.5">Password</label>
               <input
                 data-testid="input-password"
                 type="password"
@@ -109,7 +97,7 @@ export default function Login({ onLogin }: Props) {
               disabled={loading}
               className="w-full py-2.5 bg-[hsl(var(--primary))] hover:bg-[hsl(142,70%,40%)] text-[hsl(var(--primary-foreground))] font-semibold rounded-lg text-sm transition disabled:opacity-50 disabled:cursor-not-allowed mt-2"
             >
-              {loading ? "Please wait..." : isRegister ? "Create Account" : "Sign In"}
+              {loading ? "Please wait…" : isRegister ? "Create Account" : "Sign In"}
             </button>
           </form>
 
@@ -125,9 +113,8 @@ export default function Login({ onLogin }: Props) {
           </div>
         </div>
 
-        {/* Footer note */}
         <p className="text-center text-xs text-[hsl(var(--muted-foreground))] mt-6">
-          Leads saved to your account in real-time via Neon PostgreSQL
+          Leads saved in real-time to your PostgreSQL database
         </p>
       </div>
     </div>

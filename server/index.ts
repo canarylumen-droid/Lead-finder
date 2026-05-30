@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
+import { router } from "./routes.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -8,42 +9,23 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
+  const t = new Date().toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
   });
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log(`${t} [${source}] ${message}`);
 }
 
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
   const start = Date.now();
-  res.on("finish", () => {
-    const duration = Date.now() - start;
+  _res.on("finish", () => {
     if (req.path.startsWith("/api")) {
-      log(`${req.method} ${req.path} ${res.statusCode} in ${duration}ms`);
+      log(`${req.method} ${req.path} ${_res.statusCode} in ${Date.now() - start}ms`);
     }
   });
   next();
 });
 
-// Placeholder auth routes (to be wired later)
-app.post("/api/auth/login", (req, res) => {
-  res.status(501).json({ message: "Not implemented yet" });
-});
-
-app.post("/api/auth/register", (req, res) => {
-  res.status(501).json({ message: "Not implemented yet" });
-});
-
-app.get("/api/leads", (req, res) => {
-  res.json({ leads: [], total: 0, page: 1, totalPages: 0 });
-});
-
-app.get("/api/stats", (req, res) => {
-  res.json({ total: 0, withEmails: 0, activeJobs: 0 });
-});
+app.use(router);
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   const status = err.status || 500;
@@ -52,10 +34,10 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 (async () => {
   if (process.env.NODE_ENV === "production") {
-    const { serveStatic } = await import("./static");
+    const { serveStatic } = await import("./static.js");
     serveStatic(app);
   } else {
-    const { setupVite } = await import("./vite");
+    const { setupVite } = await import("./vite.js");
     await setupVite(httpServer, app);
   }
 
