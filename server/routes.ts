@@ -12,6 +12,11 @@ import { z } from "zod";
 
 export const router = Router();
 
+// ── Health check (used by Railway / load balancers) ───────────────────────────
+router.get("/api/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 const authSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
 

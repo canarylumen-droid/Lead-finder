@@ -1,10 +1,11 @@
 FROM node:20-bookworm-slim
 
-# Install Chromium system dependencies (required by Playwright)
+# ── System dependencies for Playwright Chromium ───────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     wget \
     gnupg \
+    curl \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -32,18 +33,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Node deps first (layer cache)
+# ── Install Node deps (cached layer — only re-runs if package.json changes) ───
 COPY package*.json ./
 RUN npm ci
 
-# Install Playwright Chromium browser (uses already-installed system libs)
+# ── Install Playwright Chromium (deps already installed above) ────────────────
 RUN npx playwright install chromium
 
-# Copy source and build
+# ── Copy source and build ─────────────────────────────────────────────────────
 COPY . .
 RUN npm run build
 
-# Run migration then start server
+# ── Create logs dir ───────────────────────────────────────────────────────────
+RUN mkdir -p logs
+
 EXPOSE 5000
 
+# ── Run migration then start (migration is idempotent — safe on every deploy) ─
 CMD ["sh", "-c", "node_modules/.bin/tsx script/migrate.ts && node dist/index.cjs"]
