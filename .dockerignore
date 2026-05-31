@@ -1,0 +1,8 @@
+node_modules
+dist
+.cache
+.git
+*.log
+.env
+.env.*
+attached_assets

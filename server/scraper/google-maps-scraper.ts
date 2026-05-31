@@ -99,8 +99,8 @@ async function saveLead(
 
   state.leadsCount++;
 
-  // Update DB lead count every EMIT_EVERY leads (bulk update is cheaper)
-  if (state.leadsCount % EMIT_EVERY === 0) {
+  // Update DB on first lead, then every EMIT_EVERY after (so small jobs show progress too)
+  if (state.leadsCount === 1 || state.leadsCount % EMIT_EVERY === 0) {
     await db
       .update(scrapeSessions)
       .set({ leadsCount: state.leadsCount, emailCount: state.emailCount })
