@@ -52,7 +52,7 @@ function extractEmailsFromHtml(html: string): string[] {
   $("script, style, noscript, code, pre").remove();
   const text = $.html();
   const matches = text.match(EMAIL_REGEX) || [];
-  return [...new Set(matches.map((e) => e.toLowerCase()).filter(isValidEmail))];
+  return Array.from(new Set(matches.map((e) => e.toLowerCase()).filter(isValidEmail)));
 }
 
 async function fetchPage(url: string, timeoutMs = 6000): Promise<string | null> {

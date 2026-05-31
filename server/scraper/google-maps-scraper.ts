@@ -1,8 +1,8 @@
 import { chromium, type Browser } from "playwright-chromium";
 import pLimit from "p-limit";
 import { db } from "../db.js";
-import { leads, scrapeSessions } from "../../shared/schema.js";
-import { eq, sql } from "drizzle-orm";
+import { leads, scrapeSessions, type InsertLead } from "../../shared/schema.js";
+import { eq } from "drizzle-orm";
 import { scraperEvents } from "../events.js";
 import { findEmailForBusiness, hasMXRecord } from "./email-finder.js";
 
@@ -57,7 +57,7 @@ function emitUpdate(sessionId: number, state: SessionState, status: "running" | 
 
 /** Persist lead → DB, update in-memory counters, maybe emit WS */
 async function saveLead(
-  data: Parameters<typeof db.insert>[0] extends { values: (v: infer V) => unknown } ? V : never,
+  data: InsertLead,
   sessionId: number,
   state: SessionState,
   emailLimit: ReturnType<typeof pLimit>,

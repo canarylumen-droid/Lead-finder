@@ -80,7 +80,7 @@ router.get("/api/sessions", async (req: Request, res: Response) => {
 router.get("/api/sessions/:id", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
   if (!userId) return;
-  const session = await getSession(parseInt(req.params.id, 10));
+  const session = await getSession(parseInt(String(req.params.id), 10));
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
   res.json({ session: formatSession(session) });
 });
@@ -90,12 +90,14 @@ router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
   if (!userId) return;
 
-  const sessionId = parseInt(req.params.id, 10);
+  const sessionId = parseInt(String(req.params.id), 10);
   const session   = await getSession(sessionId);
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
 
-  const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"),  10));
-  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
+  const pageRaw  = Array.isArray(req.query.page)  ? req.query.page[0]  : req.query.page;
+  const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+  const page  = Math.max(1, parseInt(String(pageRaw  ?? "1"),  10));
+  const limit = Math.min(100, Math.max(1, parseInt(String(limitRaw ?? "50"), 10)));
 
   const rows = await db
     .select()
@@ -113,7 +115,7 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
   const userId = requireUser(req, res);
   if (!userId) return;
 
-  const session = await getSession(parseInt(req.params.id, 10));
+  const session = await getSession(parseInt(String(req.params.id), 10));
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
 
   const allLeads = await streamLeadsForCSV(session.id, userId);

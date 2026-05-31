@@ -99,12 +99,12 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
 
   function addRecommendedCities() {
     const defaults = COUNTRY_CITIES[country] ?? [];
-    setCities([...new Set([...cities, ...defaults])]);
+    setCities(Array.from(new Set([...cities, ...defaults])));
   }
 
   function addAllCities() {
     const all = Object.values(COUNTRY_CITIES).flat();
-    setCities([...new Set([...cities, ...all])]);
+    setCities(Array.from(new Set([...cities, ...all])));
   }
 
   async function launch() {
