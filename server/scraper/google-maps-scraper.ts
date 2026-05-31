@@ -1,5 +1,6 @@
 import { chromium, type Browser } from "playwright-chromium";
 import pLimit from "p-limit";
+import os from "os";
 import { db } from "../db.js";
 import { leads, scrapeSessions, type InsertLead } from "../../shared/schema.js";
 import { eq } from "drizzle-orm";
@@ -18,14 +19,33 @@ export interface ScrapeConfig {
 
 // Skip first N results = "page 1 & 2" of Google Maps (each ~20 results)
 const SKIP_TOP_RESULTS = 40;
+const EMIT_EVERY = 10; // broadcast WS update every N saved leads
 
-// Concurrency pulled from env — set per your RAM:
-//   8GB  → SCRAPER_CONCURRENCY=50  EMAIL_CONCURRENCY=100
-//   16GB → SCRAPER_CONCURRENCY=120 EMAIL_CONCURRENCY=200
-//   32GB → SCRAPER_CONCURRENCY=250 EMAIL_CONCURRENCY=400
-const MAPS_CONCURRENCY  = parseInt(process.env.SCRAPER_CONCURRENCY  ?? "20",  10);
-const EMAIL_CONCURRENCY = parseInt(process.env.EMAIL_CONCURRENCY    ?? "50",  10);
-const EMIT_EVERY        = 10;   // broadcast WS update every N saved leads
+/**
+ * Auto-detect available RAM and pick optimal concurrency.
+ * Env vars SCRAPER_CONCURRENCY / EMAIL_CONCURRENCY override if explicitly set.
+ */
+function detectConcurrency(): { maps: number; email: number } {
+  const gbTotal = os.totalmem() / 1024 ** 3;
+
+  let maps: number;
+  let email: number;
+
+  if (gbTotal >= 56)      { maps = 500; email = 600; }
+  else if (gbTotal >= 28) { maps = 250; email = 400; }
+  else if (gbTotal >= 14) { maps = 200; email = 200; }   // 16 GB → 200 / 200
+  else if (gbTotal >= 7)  { maps = 80;  email = 150; }   // 8 GB
+  else                    { maps = 20;  email = 50;  }   // dev / small
+
+  // Allow manual override via env
+  if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
+  if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
+
+  console.log(`[scraper] RAM: ${gbTotal.toFixed(1)} GB → Maps concurrency: ${maps}, Email concurrency: ${email}`);
+  return { maps, email };
+}
+
+const { maps: MAPS_CONCURRENCY, email: EMAIL_CONCURRENCY } = detectConcurrency();
 
 interface SessionState {
   leadsCount: number;

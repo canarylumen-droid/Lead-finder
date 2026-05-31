@@ -38,7 +38,7 @@ interface Props {
   onNewScrape: () => void;
 }
 
-const POLL_INTERVAL = 8_000; // fallback polling if WS down
+const POLL_INTERVAL = 2_000; // fallback polling if WS down
 
 export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
   const [sessions, setSessions]       = useState<Session[]>([]);

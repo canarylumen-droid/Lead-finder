@@ -290,18 +290,6 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
               Emails found by visiting business websites — real contacts only, no fakes.
               Runs in the cloud — close your browser, leads keep coming.
             </p>
-            <div className="grid grid-cols-3 gap-3 pt-1">
-              {[
-                { ram: "16GB VPS", time: targetVolume <= 5000 ? "~10-20 min" : targetVolume <= 50000 ? "~35-45 min" : "~70-80 min" },
-                { ram: "32GB VPS", time: targetVolume <= 5000 ? "~5-12 min" : targetVolume <= 50000 ? "~18-25 min" : "~35-45 min" },
-                { ram: "64GB VPS", time: targetVolume <= 5000 ? "~3-6 min"  : targetVolume <= 50000 ? "~10-15 min" : "~20-28 min" },
-              ].map((e) => (
-                <div key={e.ram} className="bg-[hsl(var(--muted)/0.5)] rounded-lg px-3 py-2 text-center">
-                  <div className="text-xs text-[hsl(var(--muted-foreground))]">{e.ram}</div>
-                  <div className="text-sm font-semibold text-white">{e.time}</div>
-                </div>
-              ))}
-            </div>
           </div>
         )}
 
