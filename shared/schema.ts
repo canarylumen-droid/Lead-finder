@@ -20,9 +20,10 @@ export const scrapeSessions = pgTable("scrape_sessions", {
   userId: integer("user_id").notNull(),
   niches: text("niches").notNull(),         // JSON string[]
   cities: text("cities").notNull(),          // JSON string[]
-  country: text("country").notNull(),        // JSON string[] (stored as JSON array)
+  country: text("country").notNull(),        // JSON string[] of selected countries
   maxReviews: integer("max_reviews").notNull().default(40),
   targetVolume: integer("target_volume").notNull().default(500),
+  includePhone: integer("include_phone").notNull().default(1), // 1=yes 0=no
   status: text("status").notNull().default("running"),
   leadsCount: integer("leads_count").notNull().default(0),
   emailCount: integer("email_count").notNull().default(0),
@@ -72,5 +73,6 @@ export const launchSessionSchema = z.object({
   cityCountryMap: z.record(z.string(), z.string()),
   maxReviews: z.number().int().min(0).max(100000).default(40),
   targetVolume: z.number().int().min(1).max(500000).default(500),
+  includePhone: z.number().int().min(0).max(1).default(1),
 });
 export type LaunchSessionInput = z.infer<typeof launchSessionSchema>;

@@ -7,7 +7,7 @@ import { launchSessionSchema } from "../shared/schema.js";
 import { runScrapeSession } from "./scraper/google-maps-scraper.js";
 import { db } from "./db.js";
 import { leads } from "../shared/schema.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
 import { z } from "zod";
 
 export const router = Router();
@@ -57,7 +57,7 @@ router.post("/api/sessions", async (req: Request, res: Response) => {
   const parsed = launchSessionSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ message: parsed.error.issues[0]?.message });
 
-  const { niches, cities, countries, cityCountryMap, maxReviews, targetVolume } = parsed.data;
+  const { niches, cities, countries, cityCountryMap, maxReviews, targetVolume, includePhone } = parsed.data;
 
   const session = await createSession({
     userId,
@@ -66,10 +66,13 @@ router.post("/api/sessions", async (req: Request, res: Response) => {
     country: JSON.stringify(countries),
     maxReviews,
     targetVolume,
+    includePhone,
   });
 
-  runScrapeSession({ sessionId: session.id, userId, niches, cities, cityCountryMap, maxReviews, targetVolume })
-    .catch((err) => console.error(`[scraper] session ${session.id} failed:`, err.message));
+  runScrapeSession({
+    sessionId: session.id, userId, niches, cities, cityCountryMap,
+    maxReviews, targetVolume, includePhone: includePhone === 1,
+  }).catch((err) => console.error(`[scraper] session ${session.id} failed:`, err.message));
 
   res.status(201).json({ session: formatSession(session) });
 });
@@ -98,10 +101,8 @@ router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
   const session   = await getSession(sessionId);
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
 
-  const pageRaw  = Array.isArray(req.query.page)  ? req.query.page[0]  : req.query.page;
-  const limitRaw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
-  const page  = Math.max(1, parseInt(String(pageRaw  ?? "1"),  10));
-  const limit = Math.min(100, Math.max(1, parseInt(String(limitRaw ?? "50"), 10)));
+  const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"),  10));
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
 
   const rows = await db
     .select()
@@ -114,6 +115,77 @@ router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
   res.json({ leads: rows, page, limit, total: session.leadsCount });
 });
 
+// ── Aggregate stats for user (KPIs) ───────────────────────────────────────────
+router.get("/api/stats", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const [row] = await db
+    .select({
+      totalLeads:     sql<number>`cast(count(*) as int)`,
+      totalEmails:    sql<number>`cast(count(${leads.email}) as int)`,
+      totalPhones:    sql<number>`cast(count(${leads.phone}) as int)`,
+      verifiedEmails: sql<number>`cast(coalesce(sum(case when ${leads.emailVerified} = 1 then 1 else 0 end), 0) as int)`,
+      totalReviews:   sql<number>`cast(coalesce(sum(${leads.reviewsCount}), 0) as int)`,
+      avgReviews:     sql<number>`cast(coalesce(round(avg(${leads.reviewsCount})::numeric, 1), 0) as float)`,
+      withWebsite:    sql<number>`cast(count(${leads.website}) as int)`,
+      withMapsUrl:    sql<number>`cast(count(${leads.mapsUrl}) as int)`,
+    })
+    .from(leads)
+    .where(eq(leads.userId, userId));
+
+  res.json(row ?? {
+    totalLeads: 0, totalEmails: 0, totalPhones: 0, verifiedEmails: 0,
+    totalReviews: 0, avgReviews: 0, withWebsite: 0, withMapsUrl: 0,
+  });
+});
+
+// ── Lead search ───────────────────────────────────────────────────────────────
+router.get("/api/leads/search", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const q     = String(req.query.q ?? "").trim();
+  const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"), 10));
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
+
+  if (!q || q.length < 2) return void res.json({ leads: [], total: 0, q });
+
+  const rows = await db
+    .select()
+    .from(leads)
+    .where(and(
+      eq(leads.userId, userId),
+      or(
+        ilike(leads.name,  `%${q}%`),
+        ilike(leads.niche, `%${q}%`),
+        ilike(leads.city,  `%${q}%`),
+        ilike(leads.email, `%${q}%`),
+        ilike(leads.phone, `%${q}%`),
+      ),
+    ))
+    .orderBy(desc(leads.scrapedAt))
+    .limit(limit)
+    .offset((page - 1) * limit);
+
+  // Get total count for the same filter
+  const [cnt] = await db
+    .select({ total: sql<number>`cast(count(*) as int)` })
+    .from(leads)
+    .where(and(
+      eq(leads.userId, userId),
+      or(
+        ilike(leads.name,  `%${q}%`),
+        ilike(leads.niche, `%${q}%`),
+        ilike(leads.city,  `%${q}%`),
+        ilike(leads.email, `%${q}%`),
+        ilike(leads.phone, `%${q}%`),
+      ),
+    ));
+
+  res.json({ leads: rows, total: cnt?.total ?? 0, q });
+});
+
 // ── CSV download (single session) ─────────────────────────────────────────────
 router.get("/api/sessions/:id/download", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
@@ -124,7 +196,7 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
 
   const allLeads = await streamLeadsForCSV(session.id, userId);
 
-  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Rating,Reviews,Maps URL\n";
+  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Google Maps URL,Rating,Reviews\n";
   const rows = allLeads.map((l) =>
     [
       csv(l.niche),
@@ -136,9 +208,9 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
       csv(l.email ?? ""),
       l.emailVerified === 1 ? "Yes" : l.email ? "Unverified" : "",
       csv(l.website ?? ""),
+      csv(l.mapsUrl ?? ""),
       csv(l.rating ?? ""),
       l.reviewsCount ?? "",
-      csv(l.mapsUrl ?? ""),
     ].join(",")
   ).join("\n");
 
@@ -165,7 +237,7 @@ router.get("/api/leads/export", async (req: Request, res: Response) => {
     return void res.status(404).json({ message: "No leads found" });
   }
 
-  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Rating,Reviews,Maps URL\n";
+  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Google Maps URL,Rating,Reviews\n";
   const rows = allLeads.map((l) =>
     [
       csv(l.niche),
@@ -177,9 +249,9 @@ router.get("/api/leads/export", async (req: Request, res: Response) => {
       csv(l.email ?? ""),
       l.emailVerified === 1 ? "Yes" : l.email ? "Unverified" : "",
       csv(l.website ?? ""),
+      csv(l.mapsUrl ?? ""),
       csv(l.rating ?? ""),
       l.reviewsCount ?? "",
-      csv(l.mapsUrl ?? ""),
     ].join(",")
   ).join("\n");
 
@@ -190,17 +262,16 @@ router.get("/api/leads/export", async (req: Request, res: Response) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function csv(v: string): string { return `"${v.replace(/"/g, '""')}"`; }
+function csv(v: string): string { return `"${String(v).replace(/"/g, '""')}"`; }
 
 function formatSession(s: typeof import("../shared/schema.js").scrapeSessions.$inferSelect) {
   const countries = tryParse(s.country, null);
   return {
     ...s,
-    niches: tryParse(s.niches, []),
-    cities: tryParse(s.cities, []),
-    // country field: if stored as JSON array, return array; else wrap single string
+    niches:    tryParse(s.niches, []),
+    cities:    tryParse(s.cities, []),
     countries: Array.isArray(countries) ? countries : [s.country],
-    country: Array.isArray(countries) ? countries.join(", ") : s.country,
+    country:   Array.isArray(countries) ? countries.join(", ") : s.country,
   };
 }
 

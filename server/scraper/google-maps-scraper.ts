@@ -15,27 +15,25 @@ export interface ScrapeConfig {
   cityCountryMap: Record<string, string>;
   maxReviews: number;
   targetVolume: number;
+  includePhone: boolean;
 }
 
-// Skip first N results = "page 1 & 2" of Google Maps (each ~20 results)
+// Skip first 40 results = pages 1-2 of Google Maps (~20 results each)
+// Starts scraping from page 3+ — low-visibility leads only
 const SKIP_TOP_RESULTS = 40;
-const EMIT_EVERY = 20;
+const EMIT_EVERY = 5; // broadcast WS update every N leads for real-time feel
 
-/**
- * Auto-detect available RAM and pick optimal concurrency.
- * Env vars SCRAPER_CONCURRENCY / EMAIL_CONCURRENCY override if explicitly set.
- */
 function detectConcurrency(): { maps: number; email: number } {
   const gbTotal = os.totalmem() / 1024 ** 3;
 
   let maps: number;
   let email: number;
 
-  if (gbTotal >= 56)      { maps = 500; email = 800; }
-  else if (gbTotal >= 28) { maps = 300; email = 500; }
-  else if (gbTotal >= 14) { maps = 200; email = 300; }
-  else if (gbTotal >= 7)  { maps = 80;  email = 200; }
-  else                    { maps = 20;  email = 60;  }
+  if (gbTotal >= 56)      { maps = 600; email = 800; }
+  else if (gbTotal >= 28) { maps = 400; email = 500; }
+  else if (gbTotal >= 14) { maps = 250; email = 300; }  // 16 GB → 250 / 300
+  else if (gbTotal >= 7)  { maps = 100; email = 200; }  // 8 GB
+  else                    { maps = 20;  email = 60;  }  // dev / small
 
   if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
   if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
@@ -95,7 +93,7 @@ async function saveLead(
 
   state.leadsCount++;
 
-  if (state.leadsCount === 1 || state.leadsCount % EMIT_EVERY === 0) {
+  if (state.leadsCount % EMIT_EVERY === 0 || state.leadsCount === 1) {
     await db
       .update(scrapeSessions)
       .set({ leadsCount: state.leadsCount, emailCount: state.emailCount })
@@ -104,11 +102,11 @@ async function saveLead(
     emitUpdate(sessionId, state, "running");
   }
 
-  // Fire-and-forget email finding
+  // Async email finding — runs in parallel email pool
   if (website) {
     const lid = insertedId;
     emailLimit(async () => {
-      const email = await withTimeout(findEmailForBusiness(website), 12_000, null);
+      const email = await withTimeout(findEmailForBusiness(website), 15_000, null);
       if (!email) return;
 
       const mx = await withTimeout(hasMXRecord(email), 3_000, false);
@@ -142,12 +140,13 @@ async function scrapeQuery(opts: {
   targetPerQuery: number;
   sessionId: number;
   userId: number;
+  includePhone: boolean;
   state: SessionState;
   emailLimit: ReturnType<typeof pLimit>;
   stopped: { value: boolean };
 }): Promise<void> {
   const { browser, niche, city, country, maxReviews, targetPerQuery,
-          sessionId, userId, state, emailLimit, stopped } = opts;
+          sessionId, userId, includePhone, state, emailLimit, stopped } = opts;
 
   const query = `${niche} in ${city}`;
   const url   = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
@@ -160,7 +159,7 @@ async function scrapeQuery(opts: {
   try {
     const page = await context.newPage();
 
-    // Block heavy assets — faster scraping
+    // Block heavy assets for speed
     await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,mp4,mp3}", (r) => r.abort());
 
     await withTimeout(
@@ -182,13 +181,13 @@ async function scrapeQuery(opts: {
     try {
       await page.locator('div[role="feed"]').waitFor({ timeout: 12_000 });
     } catch (_) {
-      return;
+      return; // No results
     }
 
-    const seenNames = new Set<string>();
-    let localCollected   = 0;
-    let noChangeStreak   = 0;
-    let prevCardCount    = 0;
+    const seenNames   = new Set<string>();
+    let localCollected = 0;
+    let noChangeStreak = 0;
+    let prevCardCount  = 0;
 
     while (localCollected < targetPerQuery && !stopped.value) {
       const cards = await withTimeout(
@@ -222,7 +221,7 @@ async function scrapeQuery(opts: {
         prevCardCount  = cards.length;
       }
 
-      // Process cards beyond skip threshold (page 3+)
+      // Start from result index SKIP_TOP_RESULTS (page 3+)
       for (let i = SKIP_TOP_RESULTS; i < cards.length; i++) {
         if (stopped.value || localCollected >= targetPerQuery) break;
 
@@ -233,7 +232,7 @@ async function scrapeQuery(opts: {
           ? parseInt(card.reviews.replace(/,/g, ""), 10)
           : null;
 
-        // Filter: skip businesses with too many reviews (0 = no filter)
+        // maxReviews = 0 means no filter; otherwise skip businesses over the limit
         if (maxReviews > 0 && reviewsNum !== null && reviewsNum > maxReviews) continue;
 
         seenNames.add(card.name);
@@ -242,7 +241,7 @@ async function scrapeQuery(opts: {
           {
             sessionId, userId, niche, city, country,
             name: card.name,
-            phone: card.phone ?? null,
+            phone: includePhone ? (card.phone ?? null) : null,
             website: card.website ?? null,
             rating: card.rating ?? null,
             reviewsCount: reviewsNum ?? null,
@@ -259,7 +258,7 @@ async function scrapeQuery(opts: {
         localCollected++;
       }
 
-      // Scroll the feed
+      // Scroll the results feed
       await withTimeout(
         page.evaluate(() => {
           const f = document.querySelector('div[role="feed"]');
@@ -268,7 +267,7 @@ async function scrapeQuery(opts: {
         3_000,
         null,
       );
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(450);
     }
   } finally {
     await context.close().catch(() => {});
@@ -276,7 +275,7 @@ async function scrapeQuery(opts: {
 }
 
 export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
-  const { sessionId, userId, niches, cities, cityCountryMap, maxReviews, targetVolume } = config;
+  const { sessionId, userId, niches, cities, cityCountryMap, maxReviews, targetVolume, includePhone } = config;
 
   const state: SessionState = { leadsCount: 0, emailCount: 0, startTime: Date.now() };
   const stopped             = { value: false };
@@ -289,18 +288,20 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       args: [
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu",
-        "--no-first-run", "--no-zygote",
+        "--no-first-run", "--no-zygote", "--single-process",
       ],
     });
 
+    // Build all queries balanced across niches × cities
     const queries: Array<{ niche: string; city: string; country: string }> = [];
     for (const niche of niches) {
       for (const city of cities) {
-        const country = cityCountryMap[city] ?? "Unknown";
-        queries.push({ niche, city, country });
+        queries.push({ niche, city, country: cityCountryMap[city] ?? "Unknown" });
       }
     }
 
+    // Each query gets a fair share of the target volume
+    // +SKIP_TOP_RESULTS accounts for the results we skip (pages 1-2)
     const perQuery   = Math.ceil((targetVolume + SKIP_TOP_RESULTS) / queries.length);
     const mapLimit   = pLimit(MAPS_CONCURRENCY);
     const emailLimit = pLimit(EMAIL_CONCURRENCY);
@@ -308,7 +309,7 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
     await Promise.all(
       queries.map((q) =>
         mapLimit(async () => {
-          if (stopped.value || state.leadsCount >= targetVolume) return;
+          if (stopped.value) return;
           if (state.leadsCount >= targetVolume) { stopped.value = true; return; }
 
           for (let attempt = 0; attempt < 3; attempt++) {
@@ -323,6 +324,7 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
                   targetPerQuery: perQuery,
                   sessionId,
                   userId,
+                  includePhone,
                   state,
                   emailLimit,
                   stopped,
@@ -331,7 +333,7 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
                 undefined,
               );
               break;
-            } catch (err) {
+            } catch {
               if (attempt === 2) break;
               await sleep(2_000 * (attempt + 1));
             }
@@ -340,35 +342,24 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       ),
     );
 
-    // Wait for email tasks to drain (up to 5 minutes)
-    const emailDrainStart = Date.now();
+    // Drain email pool — up to 5 more minutes
+    const drainStart = Date.now();
     while (emailLimit.pendingCount > 0 || emailLimit.activeCount > 0) {
-      if (Date.now() - emailDrainStart > 300_000) break;
-      await sleep(2_000);
+      if (Date.now() - drainStart > 300_000) break;
+      await sleep(1_500);
       emitUpdate(sessionId, state, "running");
     }
 
     await db
       .update(scrapeSessions)
-      .set({
-        status: "completed",
-        leadsCount: state.leadsCount,
-        emailCount: state.emailCount,
-        completedAt: new Date(),
-      })
+      .set({ status: "completed", leadsCount: state.leadsCount, emailCount: state.emailCount, completedAt: new Date() })
       .where(eq(scrapeSessions.id, sessionId));
 
     emitUpdate(sessionId, state, "completed");
   } catch (err: any) {
     await db
       .update(scrapeSessions)
-      .set({
-        status: "failed",
-        leadsCount: state.leadsCount,
-        emailCount: state.emailCount,
-        errorMessage: err?.message ?? "Unknown error",
-        completedAt: new Date(),
-      })
+      .set({ status: "failed", leadsCount: state.leadsCount, emailCount: state.emailCount, errorMessage: err?.message ?? "Unknown error", completedAt: new Date() })
       .where(eq(scrapeSessions.id, sessionId))
       .catch(() => {});
     emitUpdate(sessionId, state, "failed");
