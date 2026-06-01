@@ -12,7 +12,7 @@ import { z } from "zod";
 
 export const router = Router();
 
-// ── Health check (used by Railway / load balancers) ───────────────────────────
+// ── Health check ──────────────────────────────────────────────────────────────
 router.get("/api/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
@@ -57,19 +57,18 @@ router.post("/api/sessions", async (req: Request, res: Response) => {
   const parsed = launchSessionSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ message: parsed.error.issues[0]?.message });
 
-  const { niches, cities, country, maxReviews, targetVolume } = parsed.data;
+  const { niches, cities, countries, cityCountryMap, maxReviews, targetVolume } = parsed.data;
 
   const session = await createSession({
     userId,
     niches: JSON.stringify(niches),
     cities: JSON.stringify(cities),
-    country,
+    country: JSON.stringify(countries),
     maxReviews,
     targetVolume,
   });
 
-  // Fire-and-forget — survives browser close, runs until completion
-  runScrapeSession({ sessionId: session.id, userId, niches, cities, country, maxReviews, targetVolume })
+  runScrapeSession({ sessionId: session.id, userId, niches, cities, cityCountryMap, maxReviews, targetVolume })
     .catch((err) => console.error(`[scraper] session ${session.id} failed:`, err.message));
 
   res.status(201).json({ session: formatSession(session) });
@@ -115,7 +114,7 @@ router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
   res.json({ leads: rows, page, limit, total: session.leadsCount });
 });
 
-// ── CSV download ──────────────────────────────────────────────────────────────
+// ── CSV download (single session) ─────────────────────────────────────────────
 router.get("/api/sessions/:id/download", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -125,21 +124,66 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
 
   const allLeads = await streamLeadsForCSV(session.id, userId);
 
-  const header = "Niche,City,Country,Business Name,Phone,Website,Rating,Reviews,Address,Email,Email Verified,Maps URL\n";
+  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Rating,Reviews,Maps URL\n";
   const rows = allLeads.map((l) =>
     [
-      csv(l.niche), csv(l.city), csv(l.country), csv(l.name),
-      csv(l.phone ?? ""), csv(l.website ?? ""),
-      csv(l.rating ?? ""), l.reviewsCount ?? "",
-      csv(l.address ?? ""), csv(l.email ?? ""),
+      csv(l.niche),
+      csv(l.name),
+      csv(l.city),
+      csv(l.country),
+      csv(l.address ?? ""),
+      csv(l.phone ?? ""),
+      csv(l.email ?? ""),
       l.emailVerified === 1 ? "Yes" : l.email ? "Unverified" : "",
+      csv(l.website ?? ""),
+      csv(l.rating ?? ""),
+      l.reviewsCount ?? "",
       csv(l.mapsUrl ?? ""),
     ].join(",")
   ).join("\n");
 
   const niches   = tryParse(session.niches, [] as string[]);
-  const filename = `leads_${niches[0] ?? "data"}_${session.id}_${new Date().toISOString().slice(0, 10)}.csv`;
+  const filename = `leads_${(niches[0] ?? "data").replace(/\s+/g, "_")}_${session.id}_${new Date().toISOString().slice(0, 10)}.csv`;
 
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(header + rows);
+});
+
+// ── CSV export (all leads for user) ───────────────────────────────────────────
+router.get("/api/leads/export", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const allLeads = await db
+    .select()
+    .from(leads)
+    .where(eq(leads.userId, userId))
+    .orderBy(desc(leads.scrapedAt));
+
+  if (allLeads.length === 0) {
+    return void res.status(404).json({ message: "No leads found" });
+  }
+
+  const header = "Niche,Business Name,City,Country,Address,Phone,Email,Email Verified,Website,Rating,Reviews,Maps URL\n";
+  const rows = allLeads.map((l) =>
+    [
+      csv(l.niche),
+      csv(l.name),
+      csv(l.city),
+      csv(l.country),
+      csv(l.address ?? ""),
+      csv(l.phone ?? ""),
+      csv(l.email ?? ""),
+      l.emailVerified === 1 ? "Yes" : l.email ? "Unverified" : "",
+      csv(l.website ?? ""),
+      csv(l.rating ?? ""),
+      l.reviewsCount ?? "",
+      csv(l.mapsUrl ?? ""),
+    ].join(",")
+  ).join("\n");
+
+  const filename = `all_leads_${new Date().toISOString().slice(0, 10)}.csv`;
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(header + rows);
@@ -149,7 +193,15 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
 function csv(v: string): string { return `"${v.replace(/"/g, '""')}"`; }
 
 function formatSession(s: typeof import("../shared/schema.js").scrapeSessions.$inferSelect) {
-  return { ...s, niches: tryParse(s.niches, []), cities: tryParse(s.cities, []) };
+  const countries = tryParse(s.country, null);
+  return {
+    ...s,
+    niches: tryParse(s.niches, []),
+    cities: tryParse(s.cities, []),
+    // country field: if stored as JSON array, return array; else wrap single string
+    countries: Array.isArray(countries) ? countries : [s.country],
+    country: Array.isArray(countries) ? countries.join(", ") : s.country,
+  };
 }
 
 function tryParse(v: string, fallback: unknown) {

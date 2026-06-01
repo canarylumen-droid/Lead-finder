@@ -20,7 +20,7 @@ export const scrapeSessions = pgTable("scrape_sessions", {
   userId: integer("user_id").notNull(),
   niches: text("niches").notNull(),         // JSON string[]
   cities: text("cities").notNull(),          // JSON string[]
-  country: text("country").notNull(),
+  country: text("country").notNull(),        // JSON string[] (stored as JSON array)
   maxReviews: integer("max_reviews").notNull().default(40),
   targetVolume: integer("target_volume").notNull().default(500),
   status: text("status").notNull().default("running"),
@@ -53,7 +53,7 @@ export const leads = pgTable("leads", {
   reviewsCount: integer("reviews_count"),
   address: text("address"),
   email: text("email"),
-  emailVerified: integer("email_verified").default(0), // 0=unknown 1=has_mx 2=no_mx
+  emailVerified: integer("email_verified").default(0), // 0=unknown 1=has_mx
   mapsUrl: text("maps_url"),
   scrapedAt: timestamp("scraped_at").defaultNow(),
 }, (t) => ({
@@ -68,8 +68,9 @@ export type InsertLead = z.infer<typeof insertLeadSchema>;
 export const launchSessionSchema = z.object({
   niches: z.array(z.string().min(1)).min(1),
   cities: z.array(z.string().min(1)).min(1),
-  country: z.string().min(1),
-  maxReviews: z.number().int().min(1).max(100000).default(40),
-  targetVolume: z.number().int().min(1).max(100000).default(500),
+  countries: z.array(z.string().min(1)).min(1),
+  cityCountryMap: z.record(z.string(), z.string()),
+  maxReviews: z.number().int().min(0).max(100000).default(40),
+  targetVolume: z.number().int().min(1).max(500000).default(500),
 });
 export type LaunchSessionInput = z.infer<typeof launchSessionSchema>;

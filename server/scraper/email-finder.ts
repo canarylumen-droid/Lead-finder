@@ -55,7 +55,7 @@ function extractEmailsFromHtml(html: string): string[] {
   return Array.from(new Set(matches.map((e) => e.toLowerCase()).filter(isValidEmail)));
 }
 
-async function fetchPage(url: string, timeoutMs = 6000): Promise<string | null> {
+async function fetchPage(url: string, timeoutMs = 4000): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -68,9 +68,9 @@ async function fetchPage(url: string, timeoutMs = 6000): Promise<string | null> 
     if (!res.ok) return null;
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text")) return null;
-    // Cap at 500KB — avoids slow downloads of huge pages
+    // Cap at 300KB — avoids slow downloads
     const buf = await res.arrayBuffer();
-    return new TextDecoder().decode(buf.slice(0, 512_000));
+    return new TextDecoder().decode(buf.slice(0, 307_200));
   } catch {
     return null;
   }
@@ -88,18 +88,24 @@ export async function findEmailForBusiness(websiteUrl: string): Promise<string |
 
   const origin = base.origin;
 
-  // 1. Homepage
-  const html = await fetchPage(origin);
-  if (html) {
-    const emails = extractEmailsFromHtml(html);
-    if (emails.length > 0) return emails[0];
+  // Fetch homepage + top contact pages in parallel for speed
+  const contactPaths = ["/contact", "/contact-us", "/about", "/about-us", "/reach-us", "/get-in-touch"];
+  const urls = [origin, ...contactPaths.slice(0, 3).map((p) => `${origin}${p}`)];
+
+  const results = await Promise.allSettled(urls.map((u) => fetchPage(u, 4000)));
+
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      const emails = extractEmailsFromHtml(result.value);
+      if (emails.length > 0) return emails[0];
+    }
   }
 
-  // 2. Common contact/about pages
-  for (const path of ["/contact", "/contact-us", "/about", "/about-us", "/reach-us", "/get-in-touch"]) {
-    const pageHtml = await fetchPage(`${origin}${path}`, 5000);
-    if (pageHtml) {
-      const emails = extractEmailsFromHtml(pageHtml);
+  // Second pass — remaining contact pages
+  for (const path of contactPaths.slice(3)) {
+    const html = await fetchPage(`${origin}${path}`, 3000);
+    if (html) {
+      const emails = extractEmailsFromHtml(html);
       if (emails.length > 0) return emails[0];
     }
   }
