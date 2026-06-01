@@ -19,6 +19,7 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const [citySelection, setCitySelection]   = useState<Record<string, string[]>>({});
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [citySearch, setCitySearch]           = useState<Record<string, string>>({});
   const [maxReviews, setMaxReviews] = useState(40);
   const [includePhone, setIncludePhone] = useState(true);
   const [launching, setLaunching]   = useState(false);
@@ -245,29 +246,73 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
                       </button>
                       {open && (
                         <div className="border-t border-gray-800 px-4 pb-4 pt-3 space-y-3">
+                          {/* City search within this country */}
+                          <div className="relative">
+                            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            <input
+                              data-testid={`input-city-search-${country}`}
+                              placeholder={`Search cities in ${country}…`}
+                              value={citySearch[country] ?? ""}
+                              onChange={(e) => setCitySearch((p) => ({ ...p, [country]: e.target.value }))}
+                              className="w-full pl-7 pr-7 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-600 text-xs focus:outline-none focus:ring-2 focus:ring-green-500/40 transition"
+                            />
+                            {citySearch[country] && (
+                              <button
+                                onClick={() => setCitySearch((p) => ({ ...p, [country]: "" }))}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                              >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
                           <div className="flex items-center gap-3 text-xs">
                             <button onClick={() => setCitySelection((p) => ({ ...p, [country]: [...allCities] }))}
                               className="text-green-400 hover:text-green-300 underline underline-offset-2">All {allCities.length}</button>
                             <span className="text-gray-700">·</span>
                             <button onClick={() => setCitySelection((p) => ({ ...p, [country]: getDefaultCities(country) }))}
-                              className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Top 20</button>
+                              className="text-blue-400 hover:text-blue-300 underline underline-offset-2">Top 30</button>
                             <span className="text-gray-700">·</span>
                             <button onClick={() => setCitySelection((p) => ({ ...p, [country]: [] }))}
                               className="text-gray-500 hover:text-gray-400 underline underline-offset-2">None</button>
+                            {citySearch[country] && (
+                              <>
+                                <span className="text-gray-700">·</span>
+                                <span className="text-gray-500">
+                                  {allCities.filter((c) => c.toLowerCase().includes((citySearch[country] ?? "").toLowerCase())).length} matches
+                                </span>
+                              </>
+                            )}
                           </div>
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-64 overflow-y-auto">
-                            {allCities.map((city) => {
-                              const checked = selected.includes(city);
-                              return (
-                                <label key={city} data-testid={`city-${city.replace(/[^a-z0-9]/gi, "_")}`}
-                                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs select-none transition ${
-                                    checked ? "bg-green-500/10 text-green-300" : "text-gray-400 hover:bg-gray-800"}`}>
-                                  <input type="checkbox" checked={checked} onChange={() => toggleCity(country, city)}
-                                    className="w-3 h-3 accent-green-500 shrink-0" />
-                                  <span className="truncate">{city}</span>
-                                </label>
-                              );
-                            })}
+                            {allCities
+                              .filter((c) =>
+                                !citySearch[country] ||
+                                c.toLowerCase().includes(citySearch[country].toLowerCase()),
+                              )
+                              .map((city) => {
+                                const checked = selected.includes(city);
+                                return (
+                                  <label key={city} data-testid={`city-${city.replace(/[^a-z0-9]/gi, "_")}`}
+                                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs select-none transition ${
+                                      checked ? "bg-green-500/10 text-green-300" : "text-gray-400 hover:bg-gray-800"}`}>
+                                    <input type="checkbox" checked={checked} onChange={() => toggleCity(country, city)}
+                                      className="w-3 h-3 accent-green-500 shrink-0" />
+                                    <span className="truncate">{city}</span>
+                                  </label>
+                                );
+                              })}
+                            {allCities.filter((c) =>
+                              !citySearch[country] ||
+                              c.toLowerCase().includes(citySearch[country].toLowerCase()),
+                            ).length === 0 && (
+                              <p className="col-span-3 text-center text-gray-600 text-xs py-4">
+                                No cities matching &ldquo;{citySearch[country]}&rdquo;
+                              </p>
+                            )}
                           </div>
                         </div>
                       )}

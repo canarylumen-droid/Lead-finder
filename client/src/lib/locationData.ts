@@ -91,7 +91,7 @@ export const COUNTRY_CITIES: Record<string, string[]> = {
 export const ALL_COUNTRIES = Object.keys(COUNTRY_CITIES).sort();
 
 // Number of top cities pre-selected by default per country
-export const DEFAULT_CITY_COUNT = 20;
+export const DEFAULT_CITY_COUNT = 30;
 
 export function getDefaultCities(country: string): string[] {
   return (COUNTRY_CITIES[country] ?? []).slice(0, DEFAULT_CITY_COUNT);

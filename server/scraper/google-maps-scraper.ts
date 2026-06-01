@@ -18,29 +18,43 @@ export interface ScrapeConfig {
   includePhone: boolean;
 }
 
-// Skip first 40 results = pages 1-2 of Google Maps (~20 results each)
-// Starts scraping from page 3+ — low-visibility leads only
-const SKIP_TOP_RESULTS = 40;
-const EMIT_EVERY = 5; // broadcast WS update every N leads for real-time feel
+// ─── Skip first 60 results (pages 1-3) — starts scraping from page 4+ ────────
+// Pages 4-70+ = hidden gems, low competition, never ranked on Google
+const SKIP_TOP_RESULTS = 60;
+const EMIT_EVERY = 3; // very frequent WS updates
 
+// ─── Concurrency config ───────────────────────────────────────────────────────
+// MAPS: Playwright browser contexts — each uses ~150-250 MB RAM.
+//   Keep LOW to avoid OOM. 30 concurrent contexts ≈ 4-6 GB.
+// EMAIL: plain HTTP fetches — very cheap. Keep HIGH.
 function detectConcurrency(): { maps: number; email: number } {
   const gbTotal = os.totalmem() / 1024 ** 3;
 
   let maps: number;
   let email: number;
 
-  if (gbTotal >= 56)      { maps = 600; email = 800; }
-  else if (gbTotal >= 28) { maps = 400; email = 500; }
-  else if (gbTotal >= 14) { maps = 250; email = 300; }  // 16 GB → 250 / 300
-  else if (gbTotal >= 7)  { maps = 100; email = 200; }  // 8 GB
-  else                    { maps = 20;  email = 60;  }  // dev / small
+  // Maps concurrency is intentionally capped LOW — browser contexts are heavy.
+  // Email concurrency can be high — it is just HTTP.
+  if (gbTotal >= 56)      { maps = 40; email = 600; }
+  else if (gbTotal >= 28) { maps = 30; email = 400; }
+  else if (gbTotal >= 14) { maps = 25; email = 300; }  // 16 GB
+  else if (gbTotal >= 7)  { maps = 15; email = 200; }  // 8 GB
+  else                    { maps = 8;  email = 80;  }  // dev / small
 
   if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
   if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
 
-  console.log(`[scraper] RAM: ${gbTotal.toFixed(1)} GB → Maps concurrency: ${maps}, Email concurrency: ${email}`);
+  console.log(
+    `[scraper] RAM: ${gbTotal.toFixed(1)} GB` +
+    ` → Maps concurrency: ${maps} (browser contexts)` +
+    `, Email concurrency: ${email} (HTTP)`,
+  );
   return { maps, email };
 }
+
+// Max realistic leads a single Google Maps search can return before it stops
+// loading new results (even with deep scrolling).
+const MAX_LEADS_PER_QUERY = 180;
 
 const { maps: MAPS_CONCURRENCY, email: EMAIL_CONCURRENCY } = detectConcurrency();
 
@@ -89,7 +103,7 @@ async function saveLead(
     return;
   }
 
-  if (!insertedId) return;
+  if (!insertedId) return; // duplicate — skip
 
   state.leadsCount++;
 
@@ -102,14 +116,15 @@ async function saveLead(
     emitUpdate(sessionId, state, "running");
   }
 
-  // Async email finding — runs in parallel email pool
+  // Async email finding — runs in parallel email pool, never blocks map scraping
   if (website) {
     const lid = insertedId;
     emailLimit(async () => {
-      const email = await withTimeout(findEmailForBusiness(website), 15_000, null);
+      // Try email find
+      const email = await withTimeout(findEmailForBusiness(website), 16_000, null);
       if (!email) return;
 
-      const mx = await withTimeout(hasMXRecord(email), 3_000, false);
+      const mx = await withTimeout(hasMXRecord(email), 4_000, false);
 
       await db
         .update(leads)
@@ -145,22 +160,28 @@ async function scrapeQuery(opts: {
   emailLimit: ReturnType<typeof pLimit>;
   stopped: { value: boolean };
 }): Promise<void> {
-  const { browser, niche, city, country, maxReviews, targetPerQuery,
-          sessionId, userId, includePhone, state, emailLimit, stopped } = opts;
+  const {
+    browser, niche, city, country, maxReviews, targetPerQuery,
+    sessionId, userId, includePhone, state, emailLimit, stopped,
+  } = opts;
+
+  // Cap so a single query never tries to get more than Google can give
+  const realTarget = Math.min(targetPerQuery, MAX_LEADS_PER_QUERY);
 
   const query = `${niche} in ${city}`;
   const url   = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    viewport: { width: 1280, height: 800 },
+    viewport: { width: 1280, height: 900 },
+    locale: "en-US",
   });
 
   try {
     const page = await context.newPage();
 
-    // Block heavy assets for speed
-    await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,mp4,mp3}", (r) => r.abort());
+    // Block images, fonts, media — significant speed improvement
+    await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,mp4,mp3,ico}", (r) => r.abort());
 
     await withTimeout(
       page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }),
@@ -173,23 +194,23 @@ async function scrapeQuery(opts: {
       const btn = page.locator('button[aria-label="Accept all"]');
       if (await btn.isVisible({ timeout: 2_000 })) {
         await btn.click();
-        await page.waitForTimeout(600);
+        await page.waitForTimeout(500);
       }
     } catch (_) {}
 
-    // Wait for results feed
     try {
       await page.locator('div[role="feed"]').waitFor({ timeout: 12_000 });
     } catch (_) {
-      return; // No results
+      return; // No results panel — skip query
     }
 
-    const seenNames   = new Set<string>();
+    const seenNames    = new Set<string>();
     let localCollected = 0;
     let noChangeStreak = 0;
     let prevCardCount  = 0;
+    let sameCountReps  = 0; // how many times we've seen the same count in a row
 
-    while (localCollected < targetPerQuery && !stopped.value) {
+    while (localCollected < realTarget && !stopped.value) {
       const cards = await withTimeout(
         page.evaluate(() => {
           const items: Array<{
@@ -204,7 +225,7 @@ async function scrapeQuery(opts: {
             const reviews = card.querySelector("span.UY7F9")?.textContent?.replace(/[()]/g, "").trim() ?? null;
             const texts   = Array.from(card.querySelectorAll("div.W4Evc span")).map((s) => s.textContent?.trim() ?? "");
             const phone   = texts.find((t) => /\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/.test(t)) ?? null;
-            const address = texts.find((t) => t.includes(",") && !/\d{3}/.test(t)) ?? null;
+            const address = texts.find((t) => t.includes(",") && !t.match(/^\(?[\d]/)) ?? null;
             const website = (card.querySelector('a[aria-label*="website"]') as HTMLAnchorElement)?.href ?? null;
             if (name) items.push({ name, url, rating, reviews, phone, address, website });
           });
@@ -215,15 +236,28 @@ async function scrapeQuery(opts: {
       );
 
       if (cards.length === prevCardCount) {
-        if (++noChangeStreak >= 5) break;
+        sameCountReps++;
+        // After 3 same-count scrolls, try a bigger scroll jump to shake loose
+        if (sameCountReps >= 3) {
+          await withTimeout(
+            page.evaluate(() => {
+              const f = document.querySelector('div[role="feed"]');
+              if (f) f.scrollTop += 3000; // big jump
+            }),
+            3_000, null,
+          );
+          await page.waitForTimeout(800);
+        }
+        if (++noChangeStreak >= 8) break; // truly no more results
       } else {
-        noChangeStreak = 0;
-        prevCardCount  = cards.length;
+        noChangeStreak  = 0;
+        sameCountReps   = 0;
+        prevCardCount   = cards.length;
       }
 
-      // Start from result index SKIP_TOP_RESULTS (page 3+)
+      // Process from SKIP_TOP_RESULTS onwards (page 4+)
       for (let i = SKIP_TOP_RESULTS; i < cards.length; i++) {
-        if (stopped.value || localCollected >= targetPerQuery) break;
+        if (stopped.value || localCollected >= realTarget) break;
 
         const card = cards[i];
         if (!card.name || seenNames.has(card.name)) continue;
@@ -232,7 +266,7 @@ async function scrapeQuery(opts: {
           ? parseInt(card.reviews.replace(/,/g, ""), 10)
           : null;
 
-        // maxReviews = 0 means no filter; otherwise skip businesses over the limit
+        // maxReviews = 0 means no filter; otherwise skip high-review businesses
         if (maxReviews > 0 && reviewsNum !== null && reviewsNum > maxReviews) continue;
 
         seenNames.add(card.name);
@@ -240,14 +274,14 @@ async function scrapeQuery(opts: {
         await saveLead(
           {
             sessionId, userId, niche, city, country,
-            name: card.name,
-            phone: includePhone ? (card.phone ?? null) : null,
-            website: card.website ?? null,
-            rating: card.rating ?? null,
+            name:         card.name,
+            phone:        includePhone ? (card.phone ?? null) : null,
+            website:      card.website ?? null,
+            rating:       card.rating ?? null,
             reviewsCount: reviewsNum ?? null,
-            address: card.address ?? null,
-            email: null,
-            mapsUrl: card.url || null,
+            address:      card.address ?? null,
+            email:        null,
+            mapsUrl:      card.url || null,
           },
           sessionId,
           state,
@@ -258,16 +292,16 @@ async function scrapeQuery(opts: {
         localCollected++;
       }
 
-      // Scroll the results feed
+      // Normal scroll — moderate amount for steady loading
       await withTimeout(
         page.evaluate(() => {
           const f = document.querySelector('div[role="feed"]');
-          if (f) f.scrollTop += 800;
+          if (f) f.scrollTop += 1200;
         }),
         3_000,
         null,
       );
-      await page.waitForTimeout(450);
+      await page.waitForTimeout(350); // minimal wait — keep it fast
     }
   } finally {
     await context.close().catch(() => {});
@@ -275,7 +309,10 @@ async function scrapeQuery(opts: {
 }
 
 export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
-  const { sessionId, userId, niches, cities, cityCountryMap, maxReviews, targetVolume, includePhone } = config;
+  const {
+    sessionId, userId, niches, cities, cityCountryMap,
+    maxReviews, targetVolume, includePhone,
+  } = config;
 
   const state: SessionState = { leadsCount: 0, emailCount: 0, startTime: Date.now() };
   const stopped             = { value: false };
@@ -289,10 +326,14 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu",
         "--no-first-run", "--no-zygote", "--single-process",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--mute-audio",
       ],
     });
 
-    // Build all queries balanced across niches × cities
+    // Build queries: every niche × every city combination
     const queries: Array<{ niche: string; city: string; country: string }> = [];
     for (const niche of niches) {
       for (const city of cities) {
@@ -300,9 +341,19 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       }
     }
 
-    // Each query gets a fair share of the target volume
-    // +SKIP_TOP_RESULTS accounts for the results we skip (pages 1-2)
-    const perQuery   = Math.ceil((targetVolume + SKIP_TOP_RESULTS) / queries.length);
+    // How many leads each query should try to collect.
+    // Capped at MAX_LEADS_PER_QUERY — Google Maps won't give more per search anyway.
+    const perQuery = Math.min(
+      MAX_LEADS_PER_QUERY,
+      Math.ceil(targetVolume / queries.length) + 20, // +20 buffer for dedupes
+    );
+
+    console.log(
+      `[scraper] session=${sessionId} | ${queries.length} queries | ` +
+      `target=${targetVolume} | perQuery=${perQuery} | ` +
+      `maps_concurrency=${MAPS_CONCURRENCY} | email_concurrency=${EMAIL_CONCURRENCY}`,
+    );
+
     const mapLimit   = pLimit(MAPS_CONCURRENCY);
     const emailLimit = pLimit(EMAIL_CONCURRENCY);
 
@@ -329,37 +380,50 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
                   emailLimit,
                   stopped,
                 }),
-                120_000,
+                90_000, // 90s per query max
                 undefined,
               );
-              break;
+              break; // success — no retry needed
             } catch {
               if (attempt === 2) break;
-              await sleep(2_000 * (attempt + 1));
+              await sleep(1_500 * (attempt + 1));
             }
           }
         }),
       ),
     );
 
-    // Drain email pool — up to 5 more minutes
+    // Drain remaining email jobs — keep updating UI as they finish
     const drainStart = Date.now();
     while (emailLimit.pendingCount > 0 || emailLimit.activeCount > 0) {
-      if (Date.now() - drainStart > 300_000) break;
-      await sleep(1_500);
+      if (Date.now() - drainStart > 600_000) break; // 10 min max drain
+      await sleep(1_000);
       emitUpdate(sessionId, state, "running");
     }
 
     await db
       .update(scrapeSessions)
-      .set({ status: "completed", leadsCount: state.leadsCount, emailCount: state.emailCount, completedAt: new Date() })
+      .set({
+        status: "completed",
+        leadsCount: state.leadsCount,
+        emailCount: state.emailCount,
+        completedAt: new Date(),
+      })
       .where(eq(scrapeSessions.id, sessionId));
 
     emitUpdate(sessionId, state, "completed");
+    console.log(`[scraper] session=${sessionId} DONE | leads=${state.leadsCount} | emails=${state.emailCount}`);
   } catch (err: any) {
+    console.error(`[scraper] session=${sessionId} FAILED:`, err?.message);
     await db
       .update(scrapeSessions)
-      .set({ status: "failed", leadsCount: state.leadsCount, emailCount: state.emailCount, errorMessage: err?.message ?? "Unknown error", completedAt: new Date() })
+      .set({
+        status: "failed",
+        leadsCount: state.leadsCount,
+        emailCount: state.emailCount,
+        errorMessage: err?.message ?? "Unknown error",
+        completedAt: new Date(),
+      })
       .where(eq(scrapeSessions.id, sessionId))
       .catch(() => {});
     emitUpdate(sessionId, state, "failed");
