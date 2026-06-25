@@ -18,9 +18,9 @@ export interface ScrapeConfig {
   includePhone: boolean;
 }
 
-// ─── Skip first 60 results (pages 1-3) — starts scraping from page 4+ ────────
-// Pages 4-70+ = hidden gems, low competition, never ranked on Google
-const SKIP_TOP_RESULTS = 60;
+// ─── Skip first 40 results (pages 1-2) — starts scraping from page 3+ ────────
+// Pages 3-70+ = hidden gems, low competition, never ranked on Google
+const SKIP_TOP_RESULTS = 40;
 const EMIT_EVERY = 3; // very frequent WS updates
 
 // ─── Concurrency config ───────────────────────────────────────────────────────
@@ -217,17 +217,23 @@ async function scrapeQuery(opts: {
             name: string; url: string; rating: string | null;
             reviews: string | null; phone: string | null;
             address: string | null; website: string | null;
+            closed: boolean;
           }> = [];
           document.querySelectorAll("div.Nv2PK").forEach((card) => {
             const name    = card.querySelector("div.qBF1Pd")?.textContent?.trim() ?? "";
             const url     = (card.querySelector("a.hfpxzc") as HTMLAnchorElement)?.href ?? "";
             const rating  = card.querySelector("span.MW4etd")?.textContent?.trim() ?? null;
             const reviews = card.querySelector("span.UY7F9")?.textContent?.replace(/[()]/g, "").trim() ?? null;
-            const texts   = Array.from(card.querySelectorAll("div.W4Evc span")).map((s) => s.textContent?.trim() ?? "");
+            const texts   = Array.from(card.querySelectorAll("div.W4Evc span, span")).map((s) => s.textContent?.trim() ?? "");
             const phone   = texts.find((t) => /\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/.test(t)) ?? null;
             const address = texts.find((t) => t.includes(",") && !t.match(/^\(?[\d]/)) ?? null;
             const website = (card.querySelector('a[aria-label*="website"]') as HTMLAnchorElement)?.href ?? null;
-            if (name) items.push({ name, url, rating, reviews, phone, address, website });
+            // Detect permanently or temporarily closed businesses
+            const cardText = card.textContent?.toLowerCase() ?? "";
+            const closed = cardText.includes("permanently closed") ||
+                           cardText.includes("temporarily closed") ||
+                           cardText.includes("closed permanently");
+            if (name) items.push({ name, url, rating, reviews, phone, address, website, closed });
           });
           return items;
         }),
@@ -261,6 +267,7 @@ async function scrapeQuery(opts: {
 
         const card = cards[i];
         if (!card.name || seenNames.has(card.name)) continue;
+        if (card.closed) continue; // skip permanently/temporarily closed businesses
 
         const reviewsNum = card.reviews
           ? parseInt(card.reviews.replace(/,/g, ""), 10)
