@@ -4,9 +4,9 @@ import {
   createSession, getSessionsByUser, getSession, streamLeadsForCSV,
 } from "./storage.js";
 import { launchSessionSchema } from "../shared/schema.js";
-import { runScrapeSession } from "./scraper/google-maps-scraper.js";
+import { runScrapeSession, cancelledSessions, pausedSessions } from "./scraper/google-maps-scraper.js";
 import { db } from "./db.js";
-import { leads } from "../shared/schema.js";
+import { leads, scrapeSessions } from "../shared/schema.js";
 import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
 import { z } from "zod";
 
@@ -35,10 +35,9 @@ function formatPhone(raw: string | null, country: string): string {
   if (!raw) return "";
   const p = raw.trim();
   if (!p) return "";
-  if (p.startsWith("+")) return p; // already has international code
+  if (p.startsWith("+")) return p;
   const code = COUNTRY_CODES[country];
   if (!code) return p;
-  // Strip leading 0 (common in UK, AU, etc.), then prepend code
   const digits = p.replace(/^0/, "").replace(/[\s\-().]/g, "");
   return `${code}${digits}`;
 }
@@ -126,11 +125,110 @@ router.get("/api/sessions/:id", async (req: Request, res: Response) => {
   res.json({ session: formatSession(session) });
 });
 
+// ── Session control: Abort ─────────────────────────────────────────────────────
+router.post("/api/sessions/:id/abort", async (req: Request, res: Response) => {
+  const userId    = requireUser(req, res);
+  if (!userId) return;
+  const sessionId = parseInt(String(req.params.id), 10);
+  const session   = await getSession(sessionId);
+  if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
+  if (session.status !== "running") return void res.status(400).json({ message: "Session is not running" });
+
+  cancelledSessions.add(sessionId);
+  pausedSessions.delete(sessionId);
+
+  await db
+    .update(scrapeSessions)
+    .set({ status: "failed", errorMessage: "Aborted by user", completedAt: new Date() })
+    .where(eq(scrapeSessions.id, sessionId));
+
+  res.json({ ok: true, message: "Session aborting…" });
+});
+
+// ── Session control: Pause ────────────────────────────────────────────────────
+router.post("/api/sessions/:id/pause", async (req: Request, res: Response) => {
+  const userId    = requireUser(req, res);
+  if (!userId) return;
+  const sessionId = parseInt(String(req.params.id), 10);
+  const session   = await getSession(sessionId);
+  if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
+  if (session.status !== "running") return void res.status(400).json({ message: "Session is not running" });
+
+  pausedSessions.add(sessionId);
+
+  await db
+    .update(scrapeSessions)
+    .set({ status: "paused" })
+    .where(eq(scrapeSessions.id, sessionId));
+
+  res.json({ ok: true, message: "Session paused" });
+});
+
+// ── Session control: Resume ───────────────────────────────────────────────────
+router.post("/api/sessions/:id/resume", async (req: Request, res: Response) => {
+  const userId    = requireUser(req, res);
+  if (!userId) return;
+  const sessionId = parseInt(String(req.params.id), 10);
+  const session   = await getSession(sessionId);
+  if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
+
+  pausedSessions.delete(sessionId);
+
+  await db
+    .update(scrapeSessions)
+    .set({ status: "running" })
+    .where(eq(scrapeSessions.id, sessionId));
+
+  res.json({ ok: true, message: "Session resumed" });
+});
+
+// ── Session control: Restart (re-launch same config as new session) ───────────
+router.post("/api/sessions/:id/restart", async (req: Request, res: Response) => {
+  const userId    = requireUser(req, res);
+  if (!userId) return;
+  const sessionId = parseInt(String(req.params.id), 10);
+  const old       = await getSession(sessionId);
+  if (!old || old.userId !== userId) return void res.status(404).json({ message: "Not found" });
+
+  const niches        = tryParse(old.niches,  [] as string[]);
+  const cities        = tryParse(old.cities,  [] as string[]);
+  const countriesRaw  = tryParse(old.country, [] as string[]);
+  const countries     = Array.isArray(countriesRaw) ? countriesRaw : [old.country];
+
+  // Build cityCountryMap from session countries/cities (best-effort)
+  const cityCountryMap: Record<string, string> = {};
+  for (const city of cities) {
+    cityCountryMap[city] = countries[0] ?? "Unknown";
+  }
+
+  const newSession = await createSession({
+    userId,
+    niches:       old.niches,
+    cities:       old.cities,
+    country:      old.country,
+    maxReviews:   old.maxReviews,
+    targetVolume: old.targetVolume,
+    includePhone: old.includePhone,
+  });
+
+  runScrapeSession({
+    sessionId:    newSession.id,
+    userId,
+    niches,
+    cities,
+    cityCountryMap,
+    maxReviews:   old.maxReviews,
+    targetVolume: old.targetVolume,
+    includePhone: old.includePhone === 1,
+  }).catch((err) => console.error(`[scraper] restart session ${newSession.id} failed:`, err.message));
+
+  res.status(201).json({ session: formatSession(newSession) });
+});
+
 // ── Paginated leads (session-specific) ────────────────────────────────────────
 router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
-  const userId = requireUser(req, res);
+  const userId    = requireUser(req, res);
   if (!userId) return;
-
   const sessionId = parseInt(String(req.params.id), 10);
   const session   = await getSession(sessionId);
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
@@ -138,21 +236,18 @@ router.get("/api/sessions/:id/leads", async (req: Request, res: Response) => {
   const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"),  10));
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
 
-  const rows = await db
-    .select()
-    .from(leads)
-    .where(and(eq(leads.sessionId, sessionId), eq(leads.userId, userId)))
-    .orderBy(desc(leads.scrapedAt))
-    .limit(limit)
-    .offset((page - 1) * limit);
+  const [rows, cnt] = await Promise.all([
+    db.select().from(leads)
+      .where(and(eq(leads.sessionId, sessionId), eq(leads.userId, userId)))
+      .orderBy(desc(leads.scrapedAt))
+      .limit(limit)
+      .offset((page - 1) * limit),
+    db.select({ total: sql<number>`cast(count(*) as int)` })
+      .from(leads)
+      .where(and(eq(leads.sessionId, sessionId), eq(leads.userId, userId))),
+  ]);
 
-  // Get real count from DB (more accurate than cached counter for pagination)
-  const [cnt] = await db
-    .select({ total: sql<number>`cast(count(*) as int)` })
-    .from(leads)
-    .where(and(eq(leads.sessionId, sessionId), eq(leads.userId, userId)));
-
-  res.json({ leads: rows, page, limit, total: cnt?.total ?? session.leadsCount });
+  res.json({ leads: rows, page, limit, total: cnt[0]?.total ?? session.leadsCount });
 });
 
 // ── Aggregate stats for user (KPIs) ───────────────────────────────────────────
@@ -180,7 +275,7 @@ router.get("/api/stats", async (req: Request, res: Response) => {
   });
 });
 
-// ── Lead search (across all sessions) ─────────────────────────────────────────
+// ── Lead search ───────────────────────────────────────────────────────────────
 router.get("/api/leads/search", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -194,11 +289,11 @@ router.get("/api/leads/search", async (req: Request, res: Response) => {
   const filter = and(
     eq(leads.userId, userId),
     or(
-      ilike(leads.name,  `%${q}%`),
-      ilike(leads.niche, `%${q}%`),
-      ilike(leads.city,  `%${q}%`),
-      ilike(leads.email, `%${q}%`),
-      ilike(leads.phone, `%${q}%`),
+      ilike(leads.name,    `%${q}%`),
+      ilike(leads.niche,   `%${q}%`),
+      ilike(leads.city,    `%${q}%`),
+      ilike(leads.email,   `%${q}%`),
+      ilike(leads.phone,   `%${q}%`),
       ilike(leads.address, `%${q}%`),
     ),
   );
@@ -213,9 +308,8 @@ router.get("/api/leads/search", async (req: Request, res: Response) => {
 
 // ── CSV download (single session) ─────────────────────────────────────────────
 router.get("/api/sessions/:id/download", async (req: Request, res: Response) => {
-  const userId = requireUser(req, res);
+  const userId  = requireUser(req, res);
   if (!userId) return;
-
   const session = await getSession(parseInt(String(req.params.id), 10));
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
 
@@ -239,9 +333,7 @@ router.get("/api/leads/export", async (req: Request, res: Response) => {
     .where(eq(leads.userId, userId))
     .orderBy(desc(leads.scrapedAt));
 
-  if (allLeads.length === 0) {
-    return void res.status(404).json({ message: "No leads found" });
-  }
+  if (allLeads.length === 0) return void res.status(404).json({ message: "No leads found" });
 
   const filename = `all_leads_${new Date().toISOString().slice(0, 10)}.csv`;
   res.setHeader("Content-Type", "text/csv");
@@ -253,18 +345,14 @@ router.get("/api/leads/export", async (req: Request, res: Response) => {
 type LeadRow = typeof leads.$inferSelect;
 
 function buildCSV(rows: LeadRow[]): string {
-  const header = [
-    "Niche","Business Name","City","Country","Address",
-    "Phone","Email","Email Verified","Website","Google Maps URL","Rating","Reviews",
-  ].map(csv).join(",");
-
-  const body = rows.map((l) => [
+  const header = ["Niche","Business Name","City","Country","Address","Phone","Email","Email Verified","Website","Google Maps URL","Rating","Reviews"].map(csv).join(",");
+  const body   = rows.map((l) => [
     csv(l.niche),
     csv(l.name),
     csv(l.city),
     csv(l.country),
     csv(l.address ?? ""),
-    csv(formatPhone(l.phone, l.country)),          // ← country code added
+    csv(formatPhone(l.phone, l.country)),
     csv(l.email ?? ""),
     l.emailVerified === 1 ? "Yes" : l.email ? "Unverified" : "",
     csv(l.website ?? ""),
@@ -272,7 +360,6 @@ function buildCSV(rows: LeadRow[]): string {
     csv(l.rating ?? ""),
     l.reviewsCount ?? "",
   ].join(",")).join("\n");
-
   return header + "\n" + body;
 }
 

@@ -7,6 +7,10 @@ import { eq } from "drizzle-orm";
 import { scraperEvents } from "../events.js";
 import { findEmailForBusiness, hasMXRecord } from "./email-finder.js";
 
+// ─── Global session control sets (imported by routes.ts) ─────────────────────
+export const cancelledSessions = new Set<number>();
+export const pausedSessions    = new Set<number>();
+
 export interface ScrapeConfig {
   sessionId: number;
   userId: number;
@@ -18,44 +22,27 @@ export interface ScrapeConfig {
   includePhone: boolean;
 }
 
-// ─── Skip first 40 results (pages 1-2) — starts scraping from page 3+ ────────
-// Pages 3-70+ = hidden gems, low competition, never ranked on Google
+// ─── Skip first 40 results (pages 1-2) — starts from page 3 ──────────────────
 const SKIP_TOP_RESULTS = 40;
-const EMIT_EVERY = 3; // very frequent WS updates
+const EMIT_EVERY       = 1;  // emit WebSocket update on every new lead
 
 // ─── Concurrency config ───────────────────────────────────────────────────────
-// MAPS: Playwright browser contexts — each uses ~150-250 MB RAM.
-//   Keep LOW to avoid OOM. 30 concurrent contexts ≈ 4-6 GB.
-// EMAIL: plain HTTP fetches — very cheap. Keep HIGH.
 function detectConcurrency(): { maps: number; email: number } {
   const gbTotal = os.totalmem() / 1024 ** 3;
-
   let maps: number;
   let email: number;
-
-  // Maps concurrency is intentionally capped LOW — browser contexts are heavy.
-  // Email concurrency can be high — it is just HTTP.
-  if (gbTotal >= 56)      { maps = 40; email = 600; }
+  if      (gbTotal >= 56) { maps = 40; email = 600; }
   else if (gbTotal >= 28) { maps = 30; email = 400; }
-  else if (gbTotal >= 14) { maps = 25; email = 300; }  // 16 GB
-  else if (gbTotal >= 7)  { maps = 15; email = 200; }  // 8 GB
-  else                    { maps = 8;  email = 80;  }  // dev / small
-
+  else if (gbTotal >= 14) { maps = 25; email = 300; }
+  else if (gbTotal >=  7) { maps = 15; email = 200; }
+  else                    { maps =  8; email =  80; }
   if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
   if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
-
-  console.log(
-    `[scraper] RAM: ${gbTotal.toFixed(1)} GB` +
-    ` → Maps concurrency: ${maps} (browser contexts)` +
-    `, Email concurrency: ${email} (HTTP)`,
-  );
+  console.log(`[scraper] RAM: ${gbTotal.toFixed(1)} GB → Maps: ${maps}, Email: ${email}`);
   return { maps, email };
 }
 
-// Max realistic leads a single Google Maps search can return before it stops
-// loading new results (even with deep scrolling).
 const MAX_LEADS_PER_QUERY = 180;
-
 const { maps: MAPS_CONCURRENCY, email: EMAIL_CONCURRENCY } = detectConcurrency();
 
 interface SessionState {
@@ -67,18 +54,17 @@ interface SessionState {
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-
 async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([p, sleep(ms).then(() => fallback)]);
 }
 
-function emitUpdate(sessionId: number, state: SessionState, status: "running" | "completed" | "failed") {
+function emitUpdate(sessionId: number, state: SessionState, status: "running" | "completed" | "failed" | "paused") {
   const elapsed = (Date.now() - state.startTime) / 60_000;
-  const lpm     = elapsed > 0 ? Math.round(state.leadsCount / elapsed) : 0;
+  const lpm     = elapsed > 0.05 ? Math.round(state.leadsCount / elapsed) : 0;
   scraperEvents.emit("session_update", {
     sessionId,
-    leadsCount: state.leadsCount,
-    emailCount: state.emailCount,
+    leadsCount:     state.leadsCount,
+    emailCount:     state.emailCount,
     status,
     leadsPerMinute: lpm,
   });
@@ -90,9 +76,13 @@ async function saveLead(
   state: SessionState,
   emailLimit: ReturnType<typeof pLimit>,
   website: string | null,
+  globalSeen: Set<string>,
 ) {
-  let insertedId: number | null = null;
+  // Cross-session dedup: skip if this user already has this business+city
+  const dedupeKey = `${data.name.toLowerCase()}|${data.city.toLowerCase()}`;
+  if (globalSeen.has(dedupeKey)) return;
 
+  let insertedId: number | null = null;
   try {
     const rows = await (db.insert(leads) as any)
       .values(data)
@@ -103,7 +93,8 @@ async function saveLead(
     return;
   }
 
-  if (!insertedId) return; // duplicate — skip
+  if (!insertedId) return; // DB conflict
+  globalSeen.add(dedupeKey); // mark as seen globally
 
   state.leadsCount++;
 
@@ -116,32 +107,25 @@ async function saveLead(
     emitUpdate(sessionId, state, "running");
   }
 
-  // Async email finding — runs in parallel email pool, never blocks map scraping
+  // Async email finding — never blocks map scraping
   if (website) {
     const lid = insertedId;
     emailLimit(async () => {
-      // Try email find
-      const email = await withTimeout(findEmailForBusiness(website), 16_000, null);
+      const email = await withTimeout(findEmailForBusiness(website), 18_000, null);
       if (!email) return;
-
       const mx = await withTimeout(hasMXRecord(email), 4_000, false);
-
       await db
         .update(leads)
         .set({ email, emailVerified: mx ? 1 : 0 })
         .where(eq(leads.id, lid))
         .catch(() => {});
-
       state.emailCount++;
-
-      if (state.emailCount % EMIT_EVERY === 0) {
-        await db
-          .update(scrapeSessions)
-          .set({ emailCount: state.emailCount })
-          .where(eq(scrapeSessions.id, sessionId))
-          .catch(() => {});
-        emitUpdate(sessionId, state, "running");
-      }
+      await db
+        .update(scrapeSessions)
+        .set({ emailCount: state.emailCount })
+        .where(eq(scrapeSessions.id, sessionId))
+        .catch(() => {});
+      emitUpdate(sessionId, state, "running");
     }).catch(() => {});
   }
 }
@@ -159,58 +143,56 @@ async function scrapeQuery(opts: {
   state: SessionState;
   emailLimit: ReturnType<typeof pLimit>;
   stopped: { value: boolean };
+  globalSeen: Set<string>;
 }): Promise<void> {
   const {
     browser, niche, city, country, maxReviews, targetPerQuery,
-    sessionId, userId, includePhone, state, emailLimit, stopped,
+    sessionId, userId, includePhone, state, emailLimit, stopped, globalSeen,
   } = opts;
 
-  // Cap so a single query never tries to get more than Google can give
-  const realTarget = Math.min(targetPerQuery, MAX_LEADS_PER_QUERY);
+  // Abort/pause check before starting
+  if (cancelledSessions.has(sessionId)) { stopped.value = true; return; }
 
-  const query = `${niche} in ${city}`;
-  const url   = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+  const realTarget = Math.min(targetPerQuery, MAX_LEADS_PER_QUERY);
+  const query      = `${niche} in ${city}`;
+  const url        = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    viewport: { width: 1280, height: 900 },
-    locale: "en-US",
+    viewport:  { width: 1280, height: 900 },
+    locale:    "en-US",
   });
 
   try {
     const page = await context.newPage();
-
-    // Block images, fonts, media — significant speed improvement
     await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,mp4,mp3,ico}", (r) => r.abort());
-
-    await withTimeout(
-      page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }),
-      30_000,
-      null,
-    );
+    await withTimeout(page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }), 30_000, null);
 
     // Accept consent if present
     try {
       const btn = page.locator('button[aria-label="Accept all"]');
-      if (await btn.isVisible({ timeout: 2_000 })) {
-        await btn.click();
-        await page.waitForTimeout(500);
-      }
+      if (await btn.isVisible({ timeout: 2_000 })) { await btn.click(); await page.waitForTimeout(500); }
     } catch (_) {}
 
     try {
       await page.locator('div[role="feed"]').waitFor({ timeout: 12_000 });
-    } catch (_) {
-      return; // No results panel — skip query
-    }
+    } catch (_) { return; }
 
     const seenNames    = new Set<string>();
     let localCollected = 0;
     let noChangeStreak = 0;
     let prevCardCount  = 0;
-    let sameCountReps  = 0; // how many times we've seen the same count in a row
+    let sameCountReps  = 0;
 
     while (localCollected < realTarget && !stopped.value) {
+      // Check for abort / pause every iteration
+      if (cancelledSessions.has(sessionId)) { stopped.value = true; break; }
+      while (pausedSessions.has(sessionId) && !cancelledSessions.has(sessionId)) {
+        emitUpdate(sessionId, state, "paused");
+        await sleep(2_000);
+      }
+      if (cancelledSessions.has(sessionId)) { stopped.value = true; break; }
+
       const cards = await withTimeout(
         page.evaluate(() => {
           const items: Array<{
@@ -225,10 +207,13 @@ async function scrapeQuery(opts: {
             const rating  = card.querySelector("span.MW4etd")?.textContent?.trim() ?? null;
             const reviews = card.querySelector("span.UY7F9")?.textContent?.replace(/[()]/g, "").trim() ?? null;
             const texts   = Array.from(card.querySelectorAll("div.W4Evc span, span")).map((s) => s.textContent?.trim() ?? "");
-            const phone   = texts.find((t) => /\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/.test(t)) ?? null;
-            const address = texts.find((t) => t.includes(",") && !t.match(/^\(?[\d]/)) ?? null;
+            // Phone: try US and international patterns
+            const phone   = texts.find((t) =>
+              /\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/.test(t) ||
+              /\+\d[\d\s\-().]{7,15}/.test(t)
+            ) ?? null;
+            const address = texts.find((t) => t.includes(",") && !t.match(/^\(?[\d+]/)) ?? null;
             const website = (card.querySelector('a[aria-label*="website"]') as HTMLAnchorElement)?.href ?? null;
-            // Detect permanently or temporarily closed businesses
             const cardText = card.textContent?.toLowerCase() ?? "";
             const closed = cardText.includes("permanently closed") ||
                            cardText.includes("temporarily closed") ||
@@ -243,37 +228,27 @@ async function scrapeQuery(opts: {
 
       if (cards.length === prevCardCount) {
         sameCountReps++;
-        // After 3 same-count scrolls, try a bigger scroll jump to shake loose
         if (sameCountReps >= 3) {
           await withTimeout(
-            page.evaluate(() => {
-              const f = document.querySelector('div[role="feed"]');
-              if (f) f.scrollTop += 3000; // big jump
-            }),
+            page.evaluate(() => { const f = document.querySelector('div[role="feed"]'); if (f) f.scrollTop += 3000; }),
             3_000, null,
           );
           await page.waitForTimeout(800);
         }
-        if (++noChangeStreak >= 8) break; // truly no more results
+        if (++noChangeStreak >= 8) break;
       } else {
-        noChangeStreak  = 0;
-        sameCountReps   = 0;
-        prevCardCount   = cards.length;
+        noChangeStreak = 0;
+        sameCountReps  = 0;
+        prevCardCount  = cards.length;
       }
 
-      // Process from SKIP_TOP_RESULTS onwards (page 4+)
       for (let i = SKIP_TOP_RESULTS; i < cards.length; i++) {
         if (stopped.value || localCollected >= realTarget) break;
-
         const card = cards[i];
         if (!card.name || seenNames.has(card.name)) continue;
-        if (card.closed) continue; // skip permanently/temporarily closed businesses
+        if (card.closed) continue; // skip permanently/temporarily closed
 
-        const reviewsNum = card.reviews
-          ? parseInt(card.reviews.replace(/,/g, ""), 10)
-          : null;
-
-        // maxReviews = 0 means no filter; otherwise skip high-review businesses
+        const reviewsNum = card.reviews ? parseInt(card.reviews.replace(/,/g, ""), 10) : null;
         if (maxReviews > 0 && reviewsNum !== null && reviewsNum > maxReviews) continue;
 
         seenNames.add(card.name);
@@ -290,25 +265,16 @@ async function scrapeQuery(opts: {
             email:        null,
             mapsUrl:      card.url || null,
           },
-          sessionId,
-          state,
-          emailLimit,
-          card.website ?? null,
+          sessionId, state, emailLimit, card.website ?? null, globalSeen,
         );
-
         localCollected++;
       }
 
-      // Normal scroll — moderate amount for steady loading
       await withTimeout(
-        page.evaluate(() => {
-          const f = document.querySelector('div[role="feed"]');
-          if (f) f.scrollTop += 1200;
-        }),
-        3_000,
-        null,
+        page.evaluate(() => { const f = document.querySelector('div[role="feed"]'); if (f) f.scrollTop += 1200; }),
+        3_000, null,
       );
-      await page.waitForTimeout(350); // minimal wait — keep it fast
+      await page.waitForTimeout(300);
     }
   } finally {
     await context.close().catch(() => {});
@@ -316,15 +282,23 @@ async function scrapeQuery(opts: {
 }
 
 export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
-  const {
-    sessionId, userId, niches, cities, cityCountryMap,
-    maxReviews, targetVolume, includePhone,
-  } = config;
+  const { sessionId, userId, niches, cities, cityCountryMap, maxReviews, targetVolume, includePhone } = config;
 
   const state: SessionState = { leadsCount: 0, emailCount: 0, startTime: Date.now() };
-  const stopped             = { value: false };
+  const stopped = { value: false };
 
   let browser: Browser | null = null;
+
+  // ── Cross-session dedup: load all existing (name, city) for this user ────────
+  const existingRows = await db
+    .select({ name: leads.name, city: leads.city })
+    .from(leads)
+    .where(eq(leads.userId, userId))
+    .catch(() => [] as { name: string; city: string }[]);
+  const globalSeen = new Set<string>(
+    existingRows.map((r) => `${r.name.toLowerCase()}|${r.city.toLowerCase()}`),
+  );
+  console.log(`[scraper] session=${sessionId} | globalSeen=${globalSeen.size} existing leads for user ${userId}`);
 
   try {
     browser = await chromium.launch({
@@ -333,14 +307,11 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu",
         "--no-first-run", "--no-zygote", "--single-process",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-extensions",
-        "--mute-audio",
+        "--disable-background-networking", "--disable-default-apps",
+        "--disable-extensions", "--mute-audio",
       ],
     });
 
-    // Build queries: every niche × every city combination
     const queries: Array<{ niche: string; city: string; country: string }> = [];
     for (const niche of niches) {
       for (const city of cities) {
@@ -348,17 +319,15 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       }
     }
 
-    // How many leads each query should try to collect.
-    // Capped at MAX_LEADS_PER_QUERY — Google Maps won't give more per search anyway.
     const perQuery = Math.min(
       MAX_LEADS_PER_QUERY,
-      Math.ceil(targetVolume / queries.length) + 20, // +20 buffer for dedupes
+      Math.ceil(targetVolume / queries.length) + 20,
     );
 
     console.log(
       `[scraper] session=${sessionId} | ${queries.length} queries | ` +
       `target=${targetVolume} | perQuery=${perQuery} | ` +
-      `maps_concurrency=${MAPS_CONCURRENCY} | email_concurrency=${EMAIL_CONCURRENCY}`,
+      `maps=${MAPS_CONCURRENCY} | email=${EMAIL_CONCURRENCY}`,
     );
 
     const mapLimit   = pLimit(MAPS_CONCURRENCY);
@@ -367,30 +336,27 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
     await Promise.all(
       queries.map((q) =>
         mapLimit(async () => {
-          if (stopped.value) return;
+          if (stopped.value || cancelledSessions.has(sessionId)) return;
           if (state.leadsCount >= targetVolume) { stopped.value = true; return; }
+
+          // Wait while paused
+          while (pausedSessions.has(sessionId) && !cancelledSessions.has(sessionId)) {
+            await sleep(2_000);
+          }
+          if (cancelledSessions.has(sessionId)) { stopped.value = true; return; }
 
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
               await withTimeout(
                 scrapeQuery({
-                  browser: browser!,
-                  niche: q.niche,
-                  city: q.city,
-                  country: q.country,
-                  maxReviews,
-                  targetPerQuery: perQuery,
-                  sessionId,
-                  userId,
-                  includePhone,
-                  state,
-                  emailLimit,
-                  stopped,
+                  browser: browser!, niche: q.niche, city: q.city, country: q.country,
+                  maxReviews, targetPerQuery: perQuery, sessionId, userId,
+                  includePhone, state, emailLimit, stopped, globalSeen,
                 }),
-                90_000, // 90s per query max
+                90_000,
                 undefined,
               );
-              break; // success — no retry needed
+              break;
             } catch {
               if (attempt === 2) break;
               await sleep(1_500 * (attempt + 1));
@@ -400,26 +366,33 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       ),
     );
 
-    // Drain remaining email jobs — keep updating UI as they finish
+    // Drain email queue
     const drainStart = Date.now();
     while (emailLimit.pendingCount > 0 || emailLimit.activeCount > 0) {
-      if (Date.now() - drainStart > 600_000) break; // 10 min max drain
+      if (Date.now() - drainStart > 600_000) break;
       await sleep(1_000);
       emitUpdate(sessionId, state, "running");
     }
 
+    const finalStatus = cancelledSessions.has(sessionId) ? "failed" : "completed";
+    const finalError  = cancelledSessions.has(sessionId) ? "Aborted by user" : undefined;
+
     await db
       .update(scrapeSessions)
       .set({
-        status: "completed",
+        status: finalStatus,
         leadsCount: state.leadsCount,
         emailCount: state.emailCount,
+        errorMessage: finalError ?? null,
         completedAt: new Date(),
       })
       .where(eq(scrapeSessions.id, sessionId));
 
-    emitUpdate(sessionId, state, "completed");
-    console.log(`[scraper] session=${sessionId} DONE | leads=${state.leadsCount} | emails=${state.emailCount}`);
+    cancelledSessions.delete(sessionId);
+    pausedSessions.delete(sessionId);
+
+    emitUpdate(sessionId, state, finalStatus === "completed" ? "completed" : "failed");
+    console.log(`[scraper] session=${sessionId} ${finalStatus} | leads=${state.leadsCount} | emails=${state.emailCount}`);
   } catch (err: any) {
     console.error(`[scraper] session=${sessionId} FAILED:`, err?.message);
     await db
@@ -433,6 +406,8 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       })
       .where(eq(scrapeSessions.id, sessionId))
       .catch(() => {});
+    cancelledSessions.delete(sessionId);
+    pausedSessions.delete(sessionId);
     emitUpdate(sessionId, state, "failed");
   } finally {
     if (browser) await browser.close().catch(() => {});
