@@ -22,8 +22,8 @@ export interface ScrapeConfig {
   includePhone: boolean;
 }
 
-// ─── Skip first 40 results (pages 1-2) — starts from page 3 ──────────────────
-const SKIP_TOP_RESULTS = 40;
+// ─── Start from first result — maxReviews filter handles qualification ────────
+const SKIP_TOP_RESULTS = 0;
 const EMIT_EVERY       = 1;  // emit WebSocket update on every new lead
 
 // ─── Concurrency config ───────────────────────────────────────────────────────
@@ -31,11 +31,11 @@ function detectConcurrency(): { maps: number; email: number } {
   const gbTotal = os.totalmem() / 1024 ** 3;
   let maps: number;
   let email: number;
-  if      (gbTotal >= 56) { maps = 40; email = 600; }
-  else if (gbTotal >= 28) { maps = 30; email = 400; }
-  else if (gbTotal >= 14) { maps = 25; email = 300; }
-  else if (gbTotal >=  7) { maps = 15; email = 200; }
-  else                    { maps =  8; email =  80; }
+  if      (gbTotal >= 56) { maps = 10; email = 200; }
+  else if (gbTotal >= 28) { maps =  6; email = 150; }
+  else if (gbTotal >= 14) { maps =  4; email = 100; }
+  else if (gbTotal >=  7) { maps =  3; email =  80; }
+  else                    { maps =  2; email =  40; }
   if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
   if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
   console.log(`[scraper] RAM: ${gbTotal.toFixed(1)} GB → Maps: ${maps}, Email: ${email}`);
@@ -157,16 +157,26 @@ async function scrapeQuery(opts: {
   const query      = `${niche} in ${city}`;
   const url        = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
-  const context = await browser.newContext({
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    viewport:  { width: 1280, height: 900 },
-    locale:    "en-US",
-  });
+  // Stagger concurrent requests: random delay 0–4s to avoid simultaneous Google hits
+  await sleep(Math.floor(Math.random() * 4000));
+
+  let context;
+  try {
+    context = await browser.newContext({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      viewport:  { width: 1280, height: 900 },
+      locale:    "en-US",
+    });
+  } catch (ctxErr: any) {
+    console.log(`[scraper] context error (browser down?): ${ctxErr?.message?.slice(0, 80)}`);
+    return;
+  }
 
   try {
     const page = await context.newPage();
     await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,mp4,mp3,ico}", (r) => r.abort());
-    await withTimeout(page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }), 30_000, null);
+    const gotoResult = await withTimeout(page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }), 30_000, null);
+    if (!gotoResult) { console.log(`[scraper] goto timeout: ${query}`); return; }
 
     // Accept consent if present
     try {
@@ -174,9 +184,16 @@ async function scrapeQuery(opts: {
       if (await btn.isVisible({ timeout: 2_000 })) { await btn.click(); await page.waitForTimeout(500); }
     } catch (_) {}
 
+    let feedLoaded = true;
     try {
       await page.locator('div[role="feed"]').waitFor({ timeout: 12_000 });
-    } catch (_) { return; }
+    } catch (_) { feedLoaded = false; }
+
+    if (!feedLoaded) {
+      const title = await page.title().catch(() => "?");
+      console.log(`[scraper] no feed (title="${title}"): ${query}`);
+      return;
+    }
 
     const seenNames    = new Set<string>();
     let localCollected = 0;
@@ -306,7 +323,7 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       args: [
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu",
-        "--no-first-run", "--no-zygote", "--single-process",
+        "--no-first-run", "--no-zygote",
         "--disable-background-networking", "--disable-default-apps",
         "--disable-extensions", "--mute-audio",
       ],
