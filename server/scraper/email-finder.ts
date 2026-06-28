@@ -5,7 +5,6 @@ const SKIP_PATTERNS = [
   "noreply", "no-reply", "donotreply", "do-not-reply",
   "bounce", "mailer-daemon", "postmaster", "unsubscribe",
   "spam", "abuse", "listserv", "notifications@", "alerts@",
-  "support@", "help@", "info@", "contact@", "hello@", "hi@",
 ];
 
 const SKIP_DOMAINS = [
