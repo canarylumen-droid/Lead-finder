@@ -1,18 +1,15 @@
 /**
  * SMTP Relay Multiplexer
  * Listens on 127.0.0.1:2525
- * Mailcow routes all outbound mail through this server.
- * Per the MAIL FROM domain → looks up domain_account_map → routes to the correct upstream.
+ * Routes outbound mail based on the MAIL FROM domain to configured upstream SMTP accounts.
  */
-import SMTPServer from "smtp-server";
+import { SMTPServer } from "smtp-server";
 import nodemailer from "nodemailer";
 import { db } from "../db.js";
 import { domainAccountMap, smtpAccounts, relayLogs } from "../../shared/schema.js";
-import { eq } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { decrypt } from "../crypto-utils.js";
 import type Mail from "nodemailer/lib/mailer/index.js";
-
-const { SMTPServer: Server } = SMTPServer;
 
 interface RouteEntry {
   smtpHost: string;
@@ -23,155 +20,139 @@ interface RouteEntry {
   isFallback: boolean;
 }
 
-// In-memory routing table: domain → array of routes for round-robin/priority
+// Optimized routing cache
 const routeCache = new Map<string, RouteEntry[]>();
 let cacheLoadedAt = 0;
-const CACHE_TTL_MS = 60_000;
+const CACHE_TTL_MS = 300_000; // 5 minutes
 
 async function loadRoutes(): Promise<void> {
-  const maps = await db.select().from(domainAccountMap);
-  const accountIds = [...new Set([
-    ...maps.map((m) => m.primaryAccountId),
-    ...maps.map((m) => m.fallbackAccountId).filter(Boolean) as number[],
-  ])];
-
-  const accounts: Record<number, typeof smtpAccounts.$inferSelect> = {};
-  for (const id of accountIds) {
-    const [acct] = await db.select().from(smtpAccounts).where(eq(smtpAccounts.id, id));
-    if (acct) accounts[id] = acct;
-  }
-
-  routeCache.clear();
-  for (const map of maps) {
-    const routes: RouteEntry[] = [];
-    
-    // Primary
-    const primary = accounts[map.primaryAccountId];
-    if (primary && primary.smtpHost && primary.smtpUser && primary.smtpPass) {
-      routes.push({
-        smtpHost:  primary.smtpHost,
-        smtpPort:  primary.smtpPort ?? 587,
-        smtpUser:  primary.smtpUser,
-        smtpPass:  decrypt(primary.smtpPass),
-        accountId: primary.id,
-        isFallback: false,
-      });
+  try {
+    const maps = await db.select().from(domainAccountMap);
+    if (maps.length === 0) {
+      routeCache.clear();
+      return;
     }
 
-    // Fallback
-    if (map.fallbackAccountId) {
-      const fallback = accounts[map.fallbackAccountId];
-      if (fallback && fallback.smtpHost && fallback.smtpUser && fallback.smtpPass) {
-        routes.push({
-          smtpHost:  fallback.smtpHost,
-          smtpPort:  fallback.smtpPort ?? 587,
-          smtpUser:  fallback.smtpUser,
-          smtpPass:  decrypt(fallback.smtpPass),
-          accountId: fallback.id,
-          isFallback: true,
-        });
+    const accountIds = Array.from(new Set(
+      maps.flatMap((m) => [m.primaryAccountId, m.fallbackAccountId]).filter((id): id is number => id !== null)
+    ));
+
+    const accounts = await db.select().from(smtpAccounts).where(inArray(smtpAccounts.id, accountIds));
+    const accountMap = new Map(accounts.map((a) => [a.id, a]));
+
+    routeCache.clear();
+    for (const map of maps) {
+      const routes: RouteEntry[] = [];
+      
+      const addRoute = (accountId: number | null, isFallback: boolean) => {
+        if (accountId === null) return;
+        const acct = accountMap.get(accountId);
+        if (acct?.smtpHost && acct.smtpUser && acct.smtpPass) {
+          routes.push({
+            smtpHost: acct.smtpHost,
+            smtpPort: acct.smtpPort ?? 587,
+            smtpUser: acct.smtpUser,
+            smtpPass: decrypt(acct.smtpPass),
+            accountId: acct.id,
+            isFallback,
+          });
+        }
+      };
+
+      addRoute(map.primaryAccountId, false);
+      addRoute(map.fallbackAccountId, true);
+
+      if (routes.length > 0) {
+        routeCache.set(map.domain.toLowerCase(), routes);
       }
     }
-
-    if (routes.length > 0) {
-      routeCache.set(map.domain, routes);
-    }
+    cacheLoadedAt = Date.now();
+    console.log(`[relay] Route cache reloaded: ${routeCache.size} domain(s) configured.`);
+  } catch (error) {
+    console.error("[relay] Failed to load routes:", error);
   }
-
-  cacheLoadedAt = Date.now();
-  console.log(`[relay] Route cache loaded — ${routeCache.size} domain(s)`);
 }
 
 async function resolveRoute(domain: string): Promise<RouteEntry[] | null> {
   if (Date.now() - cacheLoadedAt > CACHE_TTL_MS) await loadRoutes();
-  return routeCache.get(domain) ?? null;
+  return routeCache.get(domain.toLowerCase()) ?? null;
 }
 
 async function logRelay(domain: string, accountId: number | null, status: "ok" | "failed" | "fallback", error?: string) {
-  await db.insert(relayLogs).values({ domain, accountId, status, error: error ?? null });
+  try {
+    await db.insert(relayLogs).values({ domain, accountId, status, error: error ?? null });
+  } catch (err) {
+    console.error("[relay] Failed to log relay activity:", err);
+  }
 }
 
 export function startRelayServer(): void {
-  const server = new Server({
-    // No auth required — only accept from localhost / Mailcow
+  const server = new SMTPServer({
     authOptional: true,
     disabledCommands: ["STARTTLS"],
     onConnect(session, cb) {
-      const remote = session.remoteAddress;
-      if (remote !== "127.0.0.1" && remote !== "::1" && remote !== "::ffff:127.0.0.1") {
-        return cb(new Error("Connection refused: only localhost allowed"));
+      const allowed = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];
+      if (!allowed.includes(session.remoteAddress)) {
+        return cb(new Error("Connection refused: access denied"));
       }
       cb();
     },
     async onData(stream, session, cb) {
       const chunks: Buffer[] = [];
       for await (const chunk of stream) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        chunks.push(chunk as Buffer);
       }
       const raw = Buffer.concat(chunks);
 
-      // Determine sender domain from envelope
-      const from = session.envelope?.mailFrom;
-      const senderAddr = (typeof from === "object" && from !== null && "address" in from)
-        ? (from as { address: string }).address
-        : "";
-      
-      // Improve domain extraction: handle null/empty, lowercase, and ensure it's a valid domain
-      let domain = "";
-      if (senderAddr && senderAddr.includes("@")) {
-        const parts = senderAddr.split("@");
-        domain = parts[parts.length - 1].toLowerCase();
+      const senderAddr = (session.envelope?.mailFrom as { address: string } | undefined)?.address || "";
+      const domain = senderAddr.split("@").pop()?.toLowerCase() || "";
+
+      if (!domain) {
+        return cb(new Error("Missing sender domain"));
       }
 
-      const routes = await resolveRoute(domain).catch(() => null);
-      if (!routes || routes.length === 0) {
-        await logRelay(domain, null, "failed", "No route configured for this domain");
-        return cb(new Error(`No relay route for domain: ${domain}`));
+      const routes = await resolveRoute(domain);
+      if (!routes) {
+        await logRelay(domain, null, "failed", "No route found");
+        return cb(new Error(`No route for: ${domain}`));
       }
 
-      // Try routes in order (primary first, then fallback)
       let lastError = "";
       for (const route of routes) {
         try {
           const transport = nodemailer.createTransport({
-            host:   route.smtpHost,
-            port:   route.smtpPort,
+            host: route.smtpHost,
+            port: route.smtpPort,
             secure: route.smtpPort === 465,
-            auth:   { user: route.smtpUser, pass: route.smtpPass },
+            auth: { user: route.smtpUser, pass: route.smtpPass },
+            pool: true,
+            connectionTimeout: 10000,
           });
 
           const recipients = session.envelope.rcptTo.map((r: { address: string }) => r.address);
 
           await transport.sendMail({
-            envelope: {
-              from: senderAddr,
-              to:   recipients,
-            },
+            envelope: { from: senderAddr, to: recipients },
             raw,
-          } as Mail.Options & { raw: Buffer });
+          } as Mail.Options);
 
           await logRelay(domain, route.accountId, route.isFallback ? "fallback" : "ok");
-          return cb();
-        } catch (err: unknown) {
+          return cb(null, "Message accepted");
+        } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
-          console.error(`[relay] Route failed for ${domain} (Account ${route.accountId}): ${lastError}`);
-          // Continue to next route
+          console.error(`[relay] Route failed (Account ${route.accountId}): ${lastError}`);
         }
       }
 
-      await logRelay(domain, null, "failed", `All routes failed. Last error: ${lastError}`);
-      cb(new Error(`Upstream relay failed for ${domain}: ${lastError}`));
+      await logRelay(domain, null, "failed", lastError);
+      cb(new Error(`Upstream relay failed: ${lastError}`));
     },
   });
 
   server.listen(2525, "127.0.0.1", () => {
-    console.log("[relay] SMTP multiplexer listening on 127.0.0.1:2525");
+    console.log("[relay] SMTP multiplexer active on 127.0.0.1:2525");
   });
 
-  server.on("error", (err: Error) => {
-    console.error("[relay] Server error:", err.message);
-  });
-
-  // Load routes eagerly
-  loadRoutes().catch((err: Error) => console.error("[relay] Initial route load failed:", err.message));
+  server.on("error", (err: any) => console.error("[relay] Server error:", err));
+  loadRoutes().catch(console.error);
 }

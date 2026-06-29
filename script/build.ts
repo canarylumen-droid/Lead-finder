@@ -10,7 +10,6 @@ const allowlist = [
   "puppeteer-extra",
   "puppeteer-extra-plugin-stealth",
   "zod",
-  // Bundle these pure-JS packages so they don't need to be in node_modules at runtime
   "nodemailer",
   "smtp-server",
   "ws",
@@ -43,7 +42,7 @@ async function buildAll() {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
-    external: externals,
+    external: [...externals, "nodemailer", "smtp-server"],
     logLevel: "info",
   });
 
