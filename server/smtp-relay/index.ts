@@ -23,8 +23,8 @@ interface RouteEntry {
   isFallback: boolean;
 }
 
-// In-memory routing table: domain → route
-const routeCache = new Map<string, RouteEntry>();
+// In-memory routing table: domain → array of routes for round-robin/priority
+const routeCache = new Map<string, RouteEntry[]>();
 let cacheLoadedAt = 0;
 const CACHE_TTL_MS = 60_000;
 
@@ -43,24 +43,46 @@ async function loadRoutes(): Promise<void> {
 
   routeCache.clear();
   for (const map of maps) {
+    const routes: RouteEntry[] = [];
+    
+    // Primary
     const primary = accounts[map.primaryAccountId];
-    if (!primary || !primary.smtpHost || !primary.smtpUser || !primary.smtpPass) continue;
+    if (primary && primary.smtpHost && primary.smtpUser && primary.smtpPass) {
+      routes.push({
+        smtpHost:  primary.smtpHost,
+        smtpPort:  primary.smtpPort ?? 587,
+        smtpUser:  primary.smtpUser,
+        smtpPass:  decrypt(primary.smtpPass),
+        accountId: primary.id,
+        isFallback: false,
+      });
+    }
 
-    routeCache.set(map.domain, {
-      smtpHost:  primary.smtpHost,
-      smtpPort:  primary.smtpPort ?? 587,
-      smtpUser:  primary.smtpUser,
-      smtpPass:  decrypt(primary.smtpPass),
-      accountId: primary.id,
-      isFallback: false,
-    });
+    // Fallback
+    if (map.fallbackAccountId) {
+      const fallback = accounts[map.fallbackAccountId];
+      if (fallback && fallback.smtpHost && fallback.smtpUser && fallback.smtpPass) {
+        routes.push({
+          smtpHost:  fallback.smtpHost,
+          smtpPort:  fallback.smtpPort ?? 587,
+          smtpUser:  fallback.smtpUser,
+          smtpPass:  decrypt(fallback.smtpPass),
+          accountId: fallback.id,
+          isFallback: true,
+        });
+      }
+    }
+
+    if (routes.length > 0) {
+      routeCache.set(map.domain, routes);
+    }
   }
 
   cacheLoadedAt = Date.now();
   console.log(`[relay] Route cache loaded — ${routeCache.size} domain(s)`);
 }
 
-async function resolveRoute(domain: string): Promise<RouteEntry | null> {
+async function resolveRoute(domain: string): Promise<RouteEntry[] | null> {
   if (Date.now() - cacheLoadedAt > CACHE_TTL_MS) await loadRoutes();
   return routeCache.get(domain) ?? null;
 }
@@ -90,42 +112,55 @@ export function startRelayServer(): void {
 
       // Determine sender domain from envelope
       const from = session.envelope?.mailFrom;
-      const senderAddr = typeof from === "object" && from !== null && "address" in from
+      const senderAddr = (typeof from === "object" && from !== null && "address" in from)
         ? (from as { address: string }).address
         : "";
-      const domain = senderAddr.includes("@") ? senderAddr.split("@")[1] : "";
+      
+      // Improve domain extraction: handle null/empty, lowercase, and ensure it's a valid domain
+      let domain = "";
+      if (senderAddr && senderAddr.includes("@")) {
+        const parts = senderAddr.split("@");
+        domain = parts[parts.length - 1].toLowerCase();
+      }
 
-      const route = await resolveRoute(domain).catch(() => null);
-      if (!route) {
+      const routes = await resolveRoute(domain).catch(() => null);
+      if (!routes || routes.length === 0) {
         await logRelay(domain, null, "failed", "No route configured for this domain");
         return cb(new Error(`No relay route for domain: ${domain}`));
       }
 
-      try {
-        const transport = nodemailer.createTransport({
-          host:   route.smtpHost,
-          port:   route.smtpPort,
-          secure: route.smtpPort === 465,
-          auth:   { user: route.smtpUser, pass: route.smtpPass },
-        });
+      // Try routes in order (primary first, then fallback)
+      let lastError = "";
+      for (const route of routes) {
+        try {
+          const transport = nodemailer.createTransport({
+            host:   route.smtpHost,
+            port:   route.smtpPort,
+            secure: route.smtpPort === 465,
+            auth:   { user: route.smtpUser, pass: route.smtpPass },
+          });
 
-        const recipients = session.envelope.rcptTo.map((r: { address: string }) => r.address);
+          const recipients = session.envelope.rcptTo.map((r: { address: string }) => r.address);
 
-        await transport.sendMail({
-          envelope: {
-            from: senderAddr,
-            to:   recipients,
-          },
-          raw,
-        } as Mail.Options & { raw: Buffer });
+          await transport.sendMail({
+            envelope: {
+              from: senderAddr,
+              to:   recipients,
+            },
+            raw,
+          } as Mail.Options & { raw: Buffer });
 
-        await logRelay(domain, route.accountId, route.isFallback ? "fallback" : "ok");
-        cb();
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await logRelay(domain, route.accountId, "failed", msg);
-        cb(new Error(`Upstream relay failed: ${msg}`));
+          await logRelay(domain, route.accountId, route.isFallback ? "fallback" : "ok");
+          return cb();
+        } catch (err: unknown) {
+          lastError = err instanceof Error ? err.message : String(err);
+          console.error(`[relay] Route failed for ${domain} (Account ${route.accountId}): ${lastError}`);
+          // Continue to next route
+        }
       }
+
+      await logRelay(domain, null, "failed", `All routes failed. Last error: ${lastError}`);
+      cb(new Error(`Upstream relay failed for ${domain}: ${lastError}`));
     },
   });
 
