@@ -4,6 +4,7 @@ import { router } from "./routes.js";
 import { smtpRouter } from "./smtp-routes.js";
 import { mailcowRouter } from "./mailcow-routes.js";
 import { dnsRouter } from "./dns-routes.js";
+import { analyticsRouter } from "./analytics-routes.js";
 import { setupWebSocketServer } from "./websocket.js";
 import { startRelayServer } from "./smtp-relay/index.js";
 
@@ -34,6 +35,7 @@ app.use(router);
 app.use(smtpRouter);
 app.use(mailcowRouter);
 app.use(dnsRouter);
+app.use(analyticsRouter);
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const e = err as { status?: number; message?: string };

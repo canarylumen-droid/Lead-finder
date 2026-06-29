@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import type { User } from "../App";
 import {
   LayoutDashboard, Settings, Mail, Server, Globe,
-  LogOut, Menu, X, Zap,
+  LogOut, Menu, X, Zap, BarChart2,
 } from "lucide-react";
 
 interface NavItem {
@@ -13,11 +13,12 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { label: "Dashboard",      path: "/",        Icon: LayoutDashboard },
-  { label: "New Scrape",     path: "/setup",   Icon: Settings },
-  { label: "SMTP Providers", path: "/smtp",    Icon: Mail },
-  { label: "Mailcow",        path: "/mailcow", Icon: Server },
-  { label: "DNS Manager",    path: "/dns",     Icon: Globe },
+  { label: "Dashboard",      path: "/",           Icon: LayoutDashboard },
+  { label: "New Scrape",     path: "/setup",      Icon: Settings },
+  { label: "SMTP Providers", path: "/smtp",       Icon: Mail },
+  { label: "Mailcow",        path: "/mailcow",    Icon: Server },
+  { label: "DNS Manager",    path: "/dns",        Icon: Globe },
+  { label: "Analytics",      path: "/analytics",  Icon: BarChart2 },
 ];
 
 function NavLinks({ current, onClick }: { current: string; onClick?: () => void }) {

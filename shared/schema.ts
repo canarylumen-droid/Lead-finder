@@ -150,6 +150,12 @@ export const relayLogs = pgTable("relay_logs", {
 });
 export type RelayLog = typeof relayLogs.$inferSelect;
 
+// ── App Settings (key/value) ──────────────────────────────────────────────────
+export const appSettings = pgTable("app_settings", {
+  key:   text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
 // ── API Schemas ───────────────────────────────────────────────────────────────
 export const launchSessionSchema = z.object({
   niches: z.array(z.string().min(1)).min(1),

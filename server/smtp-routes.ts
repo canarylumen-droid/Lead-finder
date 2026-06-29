@@ -299,15 +299,18 @@ smtpRouter.put("/api/smtp/mappings/domain/:domain", async (req: Request, res: Re
 });
 
 // ── GET /api/smtp/relay/credentials ───────────────────────────────────────────
-smtpRouter.get("/api/smtp/relay/credentials", (_req: Request, res: Response) => {
-  const secret = process.env.SMTP_RELAY_SECRET ?? "lf-relay-secret";
-  res.json({
-    host: "127.0.0.1",
-    port: 2525,
-    username: "relay",
-    password: secret,
-    note: "Configure Mailcow → System → Configuration → Relayhost to use these credentials.",
-  });
+smtpRouter.get("/api/smtp/relay/credentials", async (_req: Request, res: Response) => {
+  const { getRelaySecret } = await import("./settings.js");
+  const secret = await getRelaySecret();
+  res.json({ host: "127.0.0.1", port: 2525, username: "relay", password: secret,
+    note: "Configure Mailcow → System → Configuration → Relayhost to use these credentials." });
+});
+
+// ── POST /api/smtp/relay/credentials/regenerate ───────────────────────────────
+smtpRouter.post("/api/smtp/relay/credentials/regenerate", async (_req: Request, res: Response) => {
+  const { regenerateRelaySecret } = await import("./settings.js");
+  const secret = await regenerateRelaySecret();
+  res.json({ host: "127.0.0.1", port: 2525, username: "relay", password: secret });
 });
 
 // ── GET /api/smtp/relay/stats ─────────────────────────────────────────────────

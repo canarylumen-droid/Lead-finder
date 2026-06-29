@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import SmtpProviders from "./pages/SmtpProviders";
 import MailcowPage from "./pages/Mailcow";
 import DnsManager from "./pages/DnsManager";
+import Analytics from "./pages/Analytics";
 import Layout from "./components/Layout";
 
 export interface User {
@@ -26,6 +27,7 @@ function AppRoutes({ user, onLogout }: { user: User; onLogout: () => void }) {
         <Route path="/smtp" component={() => <SmtpProviders user={user} />} />
         <Route path="/mailcow" component={() => <MailcowPage user={user} />} />
         <Route path="/dns" component={() => <DnsManager user={user} />} />
+        <Route path="/analytics" component={() => <Analytics user={user} />} />
         <Route component={() => <Redirect to="/" />} />
       </Switch>
     </Layout>

@@ -171,6 +171,12 @@ CREATE TABLE IF NOT EXISTS relay_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_relay_logs_created ON relay_logs(created_at DESC);
+
+-- ── App Settings ───────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 async function main() {
