@@ -231,6 +231,110 @@ mailcowRouter.post("/api/mailcow/relay/configure", async (req: Request, res: Res
   }
 });
 
+// ── POST /api/mailcow/mailboxes/set-password ──────────────────────────────────
+// Bulk-set the same password on all mailboxes in Mailcow
+mailcowRouter.post("/api/mailcow/mailboxes/set-password", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const cfg = await getConfig(userId);
+  if (!cfg) return void res.status(400).json({ message: "Mailcow not configured" });
+
+  const { password } = z.object({ password: z.string().min(8) }).parse(req.body);
+  const apiKey = decrypt(cfg.encryptedApiKey);
+
+  const mailboxes = await mailcowFetch(cfg.baseUrl, apiKey, "/api/v1/get/mailbox/all") as Array<{ username: string }>;
+  let updated = 0;
+  const errors: string[] = [];
+
+  for (const mb of mailboxes) {
+    try {
+      await mailcowFetch(cfg.baseUrl, apiKey, "/api/v1/edit/mailbox", "POST", {
+        items: [mb.username],
+        attr:  { password, password2: password },
+      });
+      updated++;
+    } catch (e: unknown) {
+      errors.push(`${mb.username}: ${(e as Error).message}`);
+    }
+  }
+
+  res.json({ updated, total: mailboxes.length, errors });
+});
+
+// ── POST /api/mailcow/sync-dns ────────────────────────────────────────────────
+// Pull DKIM for every domain in Mailcow and save SPF/DKIM/DMARC to dns_records
+mailcowRouter.post("/api/mailcow/sync-dns", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const cfg = await getConfig(userId);
+  if (!cfg) return void res.status(400).json({ message: "Mailcow not configured" });
+
+  const { spfIncludes, dmarcEmail } = z.object({
+    spfIncludes: z.array(z.string()).default([]),
+    dmarcEmail:  z.string().email().optional(),
+  }).parse(req.body);
+
+  const apiKey  = decrypt(cfg.encryptedApiKey);
+  const domains = await mailcowFetch(cfg.baseUrl, apiKey, "/api/v1/get/domain/all") as Array<{ domain_name: string }>;
+
+  const { dnsRecords } = await import("../shared/schema.js");
+  const { and } = await import("drizzle-orm");
+
+  let totalRecords = 0;
+  const results: { domain: string; records: number; dkimOk: boolean }[] = [];
+
+  const spfVal = spfIncludes.length
+    ? `v=spf1 ${spfIncludes.map((s) => `include:${s}`).join(" ")} mx ~all`
+    : "v=spf1 mx ~all";
+
+  for (const { domain_name } of domains) {
+    let dkimOk = false;
+    const toInsert: {
+      userId: number; domain: string; recordType: string;
+      name: string; value: string; ttl: number; provider: null;
+    }[] = [];
+
+    // SPF
+    toInsert.push({ userId, domain: domain_name, recordType: "TXT", name: domain_name, value: spfVal, ttl: 3600, provider: null });
+
+    // DKIM from Mailcow
+    try {
+      const dkim = await mailcowFetch(cfg.baseUrl, apiKey, `/api/v1/get/dkim/${domain_name}`) as {
+        dkim_txt?: string; dkim_selector?: string; dkim_public_key?: string;
+      };
+      if (dkim.dkim_txt && dkim.dkim_txt !== "none") {
+        const selector = dkim.dkim_selector ?? "dkim";
+        toInsert.push({
+          userId, domain: domain_name, recordType: "TXT",
+          name:  `${selector}._domainkey.${domain_name}`,
+          value: dkim.dkim_txt.includes("v=DKIM1") ? dkim.dkim_txt : `v=DKIM1; k=rsa; p=${dkim.dkim_public_key ?? dkim.dkim_txt}`,
+          ttl:   3600, provider: null,
+        });
+        dkimOk = true;
+      }
+    } catch { /* no DKIM yet */ }
+
+    // DMARC
+    const rua = dmarcEmail ? `; rua=mailto:${dmarcEmail}; ruf=mailto:${dmarcEmail}` : "";
+    toInsert.push({ userId, domain: domain_name, recordType: "TXT", name: `_dmarc.${domain_name}`, value: `v=DMARC1; p=quarantine; sp=quarantine; adkim=r; aspf=r${rua}; fo=1`, ttl: 3600, provider: null });
+
+    // Upsert records
+    let count = 0;
+    for (const r of toInsert) {
+      try {
+        await db.insert(dnsRecords).values(r)
+          .onConflictDoNothing()
+          .execute();
+        count++;
+      } catch { /* skip */ }
+    }
+    totalRecords += count;
+    results.push({ domain: domain_name, records: count, dkimOk });
+  }
+
+  res.json({ domains: domains.length, records: totalRecords, results });
+});
+
 // ── GET /api/mailcow/status ───────────────────────────────────────────────────
 mailcowRouter.get("/api/mailcow/status", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
