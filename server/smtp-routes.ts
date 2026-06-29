@@ -275,6 +275,41 @@ smtpRouter.post("/api/smtp/mappings/auto-assign", async (req: Request, res: Resp
   res.json({ assigned: inserted.length, skipped: alreadyMapped.size, message: `Assigned ${inserted.length} domain${inserted.length !== 1 ? "s" : ""} to SMTP accounts.` });
 });
 
+// ── PUT /api/smtp/mappings/domain/:domain ─────────────────────────────────────
+// Upsert: set or clear the primary account for a domain
+smtpRouter.put("/api/smtp/mappings/domain/:domain", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const domain = req.params.domain;
+  const { primaryAccountId } = z.object({ primaryAccountId: z.number().int().positive().nullable() }).parse(req.body);
+
+  if (primaryAccountId === null) {
+    // Clear mapping
+    await db.delete(domainAccountMap).where(and(eq(domainAccountMap.userId, userId), eq(domainAccountMap.domain, domain)));
+    return void res.json({ ok: true, cleared: true });
+  }
+
+  const [existing] = await db.select().from(domainAccountMap).where(and(eq(domainAccountMap.userId, userId), eq(domainAccountMap.domain, domain)));
+  if (existing) {
+    const [updated] = await db.update(domainAccountMap).set({ primaryAccountId }).where(eq(domainAccountMap.id, existing.id)).returning();
+    return void res.json({ mapping: updated });
+  }
+  const [inserted] = await db.insert(domainAccountMap).values({ userId, domain, primaryAccountId, fallbackAccountId: null }).returning();
+  res.status(201).json({ mapping: inserted });
+});
+
+// ── GET /api/smtp/relay/credentials ───────────────────────────────────────────
+smtpRouter.get("/api/smtp/relay/credentials", (_req: Request, res: Response) => {
+  const secret = process.env.SMTP_RELAY_SECRET ?? "lf-relay-secret";
+  res.json({
+    host: "127.0.0.1",
+    port: 2525,
+    username: "relay",
+    password: secret,
+    note: "Configure Mailcow → System → Configuration → Relayhost to use these credentials.",
+  });
+});
+
 // ── GET /api/smtp/relay/stats ─────────────────────────────────────────────────
 smtpRouter.get("/api/smtp/relay/stats", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);

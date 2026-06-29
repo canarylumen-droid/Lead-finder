@@ -2,12 +2,17 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { User } from "../App";
 import { apiRequest } from "../lib/queryClient";
-import { Plus, Trash2, Server, CheckCircle, XCircle, RefreshCw, Key, Globe, Inbox, Wand2, X, Zap } from "lucide-react";
+import {
+  Plus, Trash2, Server, CheckCircle, XCircle, RefreshCw,
+  Key, Globe, Inbox, Wand2, X, Zap, Link2,
+} from "lucide-react";
 
-interface MCfg { id: number; baseUrl: string; relayConfigured: number; }
+interface MCfg    { id: number; baseUrl: string; relayConfigured: number; }
 interface MCDomain { domain_name: string; active: number; aliases_in_domain?: number; mboxes_in_domain?: number; }
-interface Mailbox { username: string; name: string; active: number; quota_used_in_bytes: number; quota: number; domain?: string; }
-interface Dkim { dkim_txt?: string; dkim_selector?: string; dkim_public_key?: string; }
+interface Mailbox  { username: string; name: string; active: number; quota_used_in_bytes: number; quota: number; domain?: string; }
+interface Dkim     { dkim_txt?: string; dkim_selector?: string; dkim_public_key?: string; }
+interface SMTPAcct { id: number; providerId: number; label: string; smtpHost: string | null; smtpUser: string | null; }
+interface DomMap   { id: number; domain: string; primaryAccountId: number; }
 
 function useToast() {
   const [msgs, setMsgs] = useState<{ id: number; text: string; ok: boolean }[]>([]);
@@ -57,32 +62,46 @@ function Modal({ title, open, onClose, children, maxW = "max-w-md" }: { title: s
   );
 }
 
+function CopyBtn({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(value).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+      className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] hover:bg-[hsl(var(--primary)/0.15)] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] transition border border-[hsl(var(--border))] font-mono"
+    >
+      {copied ? "✓" : "copy"}
+    </button>
+  );
+}
+
 export default function MailcowPage({ user }: { user: User }) {
   const { toast, Toasts } = useToast();
   const qc = useQueryClient();
   const h  = { "x-user-id": String(user.id) };
 
-  const [tab,         setTab]         = useState<"domains" | "mailboxes">("domains");
-  const [showCfg,     setShowCfg]     = useState(false);
+  const [tab,           setTab]           = useState<"domains" | "mailboxes">("domains");
+  const [showCfg,       setShowCfg]       = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
-  const [cfgUrl,      setCfgUrl]      = useState("");
-  const [cfgKey,      setCfgKey]      = useState("");
-  const [showDom,     setShowDom]     = useState(false);
-  const [newDom,      setNewDom]      = useState("");
-  const [showMb,      setShowMb]      = useState(false);
-  const [mbDom,       setMbDom]       = useState("");
-  const [mbUser,      setMbUser]      = useState("");
-  const [mbName,      setMbName]      = useState("");
-  const [mbPass,      setMbPass]      = useState("");
-  const [mbQuota,     setMbQuota]     = useState("1024");
-  const [showPwdAll,  setShowPwdAll]  = useState(false);
-  const [bulkPwd,     setBulkPwd]     = useState("");
-  const [showSync,    setShowSync]    = useState(false);
-  const [syncSpf,     setSyncSpf]     = useState("");
-  const [syncDmarc,   setSyncDmarc]   = useState("");
-  const [dkimDomain,  setDkimDomain]  = useState<string | null>(null);
-  const [dkimData,    setDkimData]    = useState<Dkim | null>(null);
-  const [domFilter,   setDomFilter]   = useState("");
+  const [savingDomain,  setSavingDomain]  = useState<string | null>(null);
+  const [selected,      setSelected]      = useState<Set<string>>(new Set());
+  const [cfgUrl,        setCfgUrl]        = useState("");
+  const [cfgKey,        setCfgKey]        = useState("");
+  const [showDom,       setShowDom]       = useState(false);
+  const [newDom,        setNewDom]        = useState("");
+  const [showMb,        setShowMb]        = useState(false);
+  const [mbDom,         setMbDom]         = useState("");
+  const [mbUser,        setMbUser]        = useState("");
+  const [mbName,        setMbName]        = useState("");
+  const [mbPass,        setMbPass]        = useState("");
+  const [mbQuota,       setMbQuota]       = useState("1024");
+  const [showPwdAll,    setShowPwdAll]    = useState(false);
+  const [bulkPwd,       setBulkPwd]       = useState("");
+  const [showSync,      setShowSync]      = useState(false);
+  const [syncSpf,       setSyncSpf]       = useState("");
+  const [syncDmarc,     setSyncDmarc]     = useState("");
+  const [dkimDomain,    setDkimDomain]    = useState<string | null>(null);
+  const [dkimData,      setDkimData]      = useState<Dkim | null>(null);
+  const [domFilter,     setDomFilter]     = useState("");
 
   const { data: cfgData, isLoading: cfgLoading } = useQuery<{ config: MCfg | null }>({
     queryKey: ["/api/mailcow/config", user.id],
@@ -100,16 +119,38 @@ export default function MailcowPage({ user }: { user: User }) {
     queryFn:  () => fetch("/api/mailcow/mailboxes", { headers: h }).then((r) => r.json()),
     enabled:  !!config,
   });
+  const { data: smtpData } = useQuery<{ accounts: SMTPAcct[] }>({
+    queryKey: ["/api/smtp/accounts", user.id],
+    queryFn:  () => fetch("/api/smtp/accounts", { headers: h }).then((r) => r.json()),
+  });
+  const { data: mapData, refetch: refMaps } = useQuery<{ mappings: DomMap[] }>({
+    queryKey: ["/api/smtp/mappings", user.id],
+    queryFn:  () => fetch("/api/smtp/mappings", { headers: h }).then((r) => r.json()),
+  });
+  const { data: relayCredsData } = useQuery<{ host: string; port: number; username: string; password: string; note: string }>({
+    queryKey: ["/api/smtp/relay/credentials"],
+    queryFn:  () => fetch("/api/smtp/relay/credentials").then((r) => r.json()),
+  });
 
-  const allDomains  = domsData?.domains   ?? [];
-  const allMailboxes = mbData?.mailboxes  ?? [];
+  const allDomains   = domsData?.domains   ?? [];
+  const allMailboxes = mbData?.mailboxes   ?? [];
+  const smtpAccounts = smtpData?.accounts  ?? [];
+  const domainMaps   = mapData?.mappings   ?? [];
   const domains  = domFilter ? allDomains.filter((d) => d.domain_name.includes(domFilter)) : allDomains;
   const mailboxes = domFilter ? allMailboxes.filter((m) => m.username.includes(domFilter) || m.domain?.includes(domFilter)) : allMailboxes;
+
+  const domainMapIndex = Object.fromEntries(domainMaps.map((m) => [m.domain, m]));
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const saveCfg = useMutation({
     mutationFn: () => apiRequest("PUT", "/api/mailcow/config", { baseUrl: cfgUrl.trim(), apiKey: cfgKey.trim() }, h),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/mailcow/config", user.id] }); toast("Mailcow connected ✓"); setShowCfg(false); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/mailcow/config", user.id] });
+      qc.invalidateQueries({ queryKey: ["/api/mailcow/domains", user.id] });
+      qc.invalidateQueries({ queryKey: ["/api/mailcow/mailboxes", user.id] });
+      toast("Mailcow connected ✓");
+      setShowCfg(false);
+    },
     onError: (e: Error) => toast(e.message, false),
   });
   const addDom = useMutation({
@@ -160,19 +201,40 @@ export default function MailcowPage({ user }: { user: User }) {
     onError: (e: Error) => toast(e.message, false),
   });
 
-  async function autoAssignSmtp() {
+  // ── Per-domain SMTP assignment ─────────────────────────────────────────────
+  async function assignDomainAccount(domain: string, accountId: number | null) {
+    setSavingDomain(domain);
+    try {
+      await apiRequest("PUT", `/api/smtp/mappings/domain/${encodeURIComponent(domain)}`, { primaryAccountId: accountId }, h);
+      refMaps();
+    } catch (e: unknown) {
+      toast((e as Error).message, false);
+    } finally {
+      setSavingDomain(null);
+    }
+  }
+
+  // ── Select / deselect helpers ─────────────────────────────────────────────
+  function toggleDomain(name: string) {
+    setSelected((prev) => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
+  }
+  function selectAll() { setSelected(new Set(domains.map((d) => d.domain_name))); }
+  function selectNone() { setSelected(new Set()); }
+
+  // ── Auto-assign selected domains round-robin to SMTP accounts ────────────
+  async function autoAssignSelected() {
+    const list = [...selected];
+    if (list.length === 0) { toast("Select at least one domain first", false); return; }
+    if (smtpAccounts.length === 0) { toast("No SMTP accounts found — add accounts first", false); return; }
     setAutoAssigning(true);
     try {
-      const domains = allDomains.map((d) => d.domain_name).filter(Boolean);
-      if (domains.length === 0) { toast("No Mailcow domains found — add domains first", false); return; }
-      const r = await apiRequest("POST", "/api/smtp/mappings/auto-assign", { domains }, h);
-      const data = await r.json() as { assigned: number; skipped: number; message: string };
+      const res  = await apiRequest("POST", "/api/smtp/mappings/auto-assign", { domains: list }, h);
+      const data = await res.json() as { assigned: number; skipped: number; message: string };
+      refMaps();
       toast(data.message);
-    } catch (e: unknown) {
-      toast((e as Error).message || "Auto-assign failed", false);
-    } finally {
-      setAutoAssigning(false);
-    }
+      setSelected(new Set());
+    } catch (e: unknown) { toast((e as Error).message, false); }
+    finally { setAutoAssigning(false); }
   }
 
   async function viewDkim(domain: string) {
@@ -215,34 +277,53 @@ export default function MailcowPage({ user }: { user: User }) {
 
       {/* Connection status */}
       {config ? (
-        <div className="flex items-center justify-between p-4 bg-green-500/10 border border-green-500/30 rounded-xl flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <CheckCircle size={18} className="text-green-400 shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-[hsl(var(--foreground))]">Connected to Mailcow</p>
-              <p className="text-xs text-[hsl(var(--muted-foreground))]">{config.baseUrl}</p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between p-4 bg-green-500/10 border border-green-500/30 rounded-xl flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <CheckCircle size={18} className="text-green-400 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-[hsl(var(--foreground))]">Connected to Mailcow</p>
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">{config.baseUrl}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {config.relayConfigured ? (
+                <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-green-500/15 text-green-400 border border-green-500/30">Relay Active → :2525 ✓</span>
+              ) : (
+                <Btn onClick={() => configRelay.mutate()} disabled={configRelay.isPending} data-testid="button-configure-relay" className="text-xs px-3 py-1.5">
+                  {configRelay.isPending ? <><span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />Configuring…</> : "→ Set Relay :2525"}
+                </Btn>
+              )}
+              <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={() => setShowPwdAll(true)} data-testid="button-set-all-passwords">
+                <Key size={12} />Set All Passwords
+              </Btn>
+              <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={() => setShowSync(true)} data-testid="button-sync-dns">
+                <Wand2 size={12} />Sync DNS
+              </Btn>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {config.relayConfigured ? (
-              <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-green-500/15 text-green-400 border border-green-500/30">Relay Active → :2525 ✓</span>
-            ) : (
-              <Btn onClick={() => configRelay.mutate()} disabled={configRelay.isPending} data-testid="button-configure-relay" className="text-xs px-3 py-1.5">
-                {configRelay.isPending ? <><span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />Configuring…</> : "→ Set Relay :2525"}
-              </Btn>
-            )}
-            <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={() => setShowPwdAll(true)} data-testid="button-set-all-passwords">
-              <Key size={12} />Set All Passwords
-            </Btn>
-            <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={() => setShowSync(true)} data-testid="button-sync-dns">
-              <Wand2 size={12} />Sync DNS
-            </Btn>
-            <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={autoAssignSmtp} disabled={autoAssigning} data-testid="button-auto-assign-smtp">
-              {autoAssigning
-                ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Assigning…</>
-                : <><Zap size={12} />Auto-Assign SMTP</>}
-            </Btn>
-          </div>
+
+          {/* Relay credentials strip */}
+          {relayCredsData && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl">
+              <div className="flex items-center gap-1.5">
+                <Link2 size={13} className="text-[hsl(var(--primary))] shrink-0" />
+                <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">Relay creds for Mailcow:</span>
+              </div>
+              {[
+                { label: "Host",     val: relayCredsData.host },
+                { label: "Port",     val: String(relayCredsData.port) },
+                { label: "User",     val: relayCredsData.username },
+                { label: "Password", val: relayCredsData.password },
+              ].map(({ label, val }) => (
+                <div key={label} className="flex items-center gap-1">
+                  <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{label}:</span>
+                  <code className="text-xs font-mono text-[hsl(var(--foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">{val}</code>
+                  <CopyBtn value={val} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-14 border border-dashed border-[hsl(var(--border))] rounded-xl gap-3">
@@ -292,13 +373,13 @@ export default function MailcowPage({ user }: { user: User }) {
             </div>
 
             {/* Toolbar */}
-            <div className="flex items-center justify-between px-4 py-3 bg-[hsl(var(--muted)/0.3)] border-b border-[hsl(var(--border))]">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between px-4 py-3 bg-[hsl(var(--muted)/0.3)] border-b border-[hsl(var(--border))] flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <input
                   placeholder={tab === "domains" ? "Filter domains…" : "Filter mailboxes…"}
                   value={domFilter}
                   onChange={(e) => setDomFilter(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-[hsl(var(--muted))] border border-[hsl(var(--border))] rounded-lg text-[hsl(var(--foreground))] placeholder-[hsl(var(--muted-foreground))] focus:outline-none w-48"
+                  className="px-3 py-1.5 text-xs bg-[hsl(var(--muted))] border border-[hsl(var(--border))] rounded-lg text-[hsl(var(--foreground))] placeholder-[hsl(var(--muted-foreground))] focus:outline-none w-44"
                 />
                 <button
                   onClick={() => tab === "domains" ? refDoms() : refMbs()}
@@ -307,6 +388,22 @@ export default function MailcowPage({ user }: { user: User }) {
                 >
                   <RefreshCw size={14} className={(tab === "domains" ? domsFetching : mbFetching) ? "animate-spin" : ""} />
                 </button>
+
+                {/* Domain-specific controls */}
+                {tab === "domains" && domains.length > 0 && (
+                  <>
+                    <span className="text-[hsl(var(--border))] select-none">|</span>
+                    <button onClick={selectAll} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">Select all</button>
+                    <button onClick={selectNone} className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">None</button>
+                    {selected.size > 0 && (
+                      <Btn className="text-xs px-2.5 py-1" onClick={autoAssignSelected} disabled={autoAssigning} data-testid="button-auto-assign-selected">
+                        {autoAssigning
+                          ? <><span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />Assigning…</>
+                          : <><Zap size={11} />Auto-assign {selected.size} domain{selected.size !== 1 ? "s" : ""}</>}
+                      </Btn>
+                    )}
+                  </>
+                )}
               </div>
               <Btn className="text-xs px-3 py-1.5" onClick={() => tab === "domains" ? setShowDom(true) : setShowMb(true)} data-testid={`button-add-${tab === "domains" ? "domain" : "mailbox"}`}>
                 <Plus size={13} />Add {tab === "domains" ? "Domain" : "Mailbox"}
@@ -325,36 +422,73 @@ export default function MailcowPage({ user }: { user: User }) {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-[hsl(var(--muted)/0.4)]">
-                        {["Domain","Status","Mailboxes","DKIM",""].map((h_) => (
+                        <th className="px-3 py-2.5 w-8">
+                          <input
+                            type="checkbox"
+                            checked={selected.size === domains.length && domains.length > 0}
+                            onChange={(e) => e.target.checked ? selectAll() : selectNone()}
+                            className="accent-[hsl(var(--primary))]"
+                          />
+                        </th>
+                        {["Domain", "Status", "Mailboxes", "SMTP Account", "DKIM", ""].map((h_) => (
                           <th key={h_} className="text-left text-xs font-medium text-[hsl(var(--muted-foreground))] px-4 py-2.5">{h_}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {domains.map((d) => (
-                        <tr key={d.domain_name} data-testid={`row-domain-${d.domain_name}`} className="border-t border-[hsl(var(--border)/0.5)] hover:bg-[hsl(var(--muted)/0.2)] transition-colors">
-                          <td className="px-4 py-3 font-mono text-sm text-[hsl(var(--foreground))]">{d.domain_name}</td>
-                          <td className="px-4 py-3">
-                            {d.active
-                              ? <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-500/15 text-green-400 border border-green-500/30">Active</span>
-                              : <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">Inactive</span>}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-[hsl(var(--muted-foreground))]">
-                            {d.mboxes_in_domain ?? allMailboxes.filter((m) => m.username.endsWith(`@${d.domain_name}`)).length}
-                          </td>
-                          <td className="px-4 py-3">
-                            <button onClick={() => viewDkim(d.domain_name)} data-testid={`button-dkim-${d.domain_name}`}
-                              className="px-2 py-1 text-[10px] border border-[hsl(var(--border))] rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:border-[hsl(var(--primary))] transition-colors font-medium">
-                              DKIM
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Btn variant="danger" className="px-2 py-1.5" onClick={() => { if (confirm(`Delete domain ${d.domain_name}?`)) delDom.mutate(d.domain_name); }} data-testid={`button-delete-domain-${d.domain_name}`}>
-                              <Trash2 size={13} />
-                            </Btn>
-                          </td>
-                        </tr>
-                      ))}
+                      {domains.map((d) => {
+                        const mapping = domainMapIndex[d.domain_name] ?? null;
+                        const isSaving = savingDomain === d.domain_name;
+                        return (
+                          <tr key={d.domain_name} data-testid={`row-domain-${d.domain_name}`} className={`border-t border-[hsl(var(--border)/0.5)] hover:bg-[hsl(var(--muted)/0.2)] transition-colors ${selected.has(d.domain_name) ? "bg-[hsl(var(--primary)/0.04)]" : ""}`}>
+                            <td className="px-3 py-3">
+                              <input
+                                type="checkbox"
+                                checked={selected.has(d.domain_name)}
+                                onChange={() => toggleDomain(d.domain_name)}
+                                className="accent-[hsl(var(--primary))]"
+                              />
+                            </td>
+                            <td className="px-4 py-3 font-mono text-sm text-[hsl(var(--foreground))]">{d.domain_name}</td>
+                            <td className="px-4 py-3">
+                              {d.active
+                                ? <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-500/15 text-green-400 border border-green-500/30">Active</span>
+                                : <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">Inactive</span>}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+                              {d.mboxes_in_domain ?? allMailboxes.filter((m) => m.username.endsWith(`@${d.domain_name}`)).length}
+                            </td>
+                            <td className="px-4 py-3 min-w-[180px]">
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  value={mapping?.primaryAccountId ?? ""}
+                                  onChange={(e) => assignDomainAccount(d.domain_name, e.target.value ? parseInt(e.target.value) : null)}
+                                  disabled={isSaving}
+                                  data-testid={`select-smtp-${d.domain_name}`}
+                                  className="flex-1 px-2 py-1 text-xs bg-[hsl(var(--muted))] border border-[hsl(var(--border))] rounded-lg text-[hsl(var(--foreground))] focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary)/0.5)] disabled:opacity-60"
+                                >
+                                  <option value="">— unassigned —</option>
+                                  {smtpAccounts.map((a) => (
+                                    <option key={a.id} value={a.id}>{a.label}{a.smtpHost ? ` (${a.smtpHost})` : ""}</option>
+                                  ))}
+                                </select>
+                                {isSaving && <span className="w-3 h-3 border-2 border-[hsl(var(--primary))] border-t-transparent rounded-full animate-spin shrink-0" />}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <button onClick={() => viewDkim(d.domain_name)} data-testid={`button-dkim-${d.domain_name}`}
+                                className="px-2 py-1 text-[10px] border border-[hsl(var(--border))] rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:border-[hsl(var(--primary))] transition-colors font-medium">
+                                DKIM
+                              </button>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Btn variant="danger" className="px-2 py-1.5" onClick={() => { if (confirm(`Delete domain ${d.domain_name}?`)) delDom.mutate(d.domain_name); }} data-testid={`button-delete-domain-${d.domain_name}`}>
+                                <Trash2 size={13} />
+                              </Btn>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -373,7 +507,7 @@ export default function MailcowPage({ user }: { user: User }) {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-[hsl(var(--muted)/0.4)]">
-                        {["Email","Name","Quota Used","Status",""].map((h_) => (
+                        {["Email", "Name", "Quota Used", "Status", ""].map((h_) => (
                           <th key={h_} className="text-left text-xs font-medium text-[hsl(var(--muted-foreground))] px-4 py-2.5">{h_}</th>
                         ))}
                       </tr>
@@ -430,7 +564,7 @@ export default function MailcowPage({ user }: { user: User }) {
             <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">API Key</label>
             <Inp data-testid="input-mailcow-key" type="password" placeholder="API key from Mailcow admin → API → Create key" value={cfgKey} onChange={(e) => setCfgKey(e.target.value)} />
           </div>
-          <p className="text-xs text-[hsl(var(--muted-foreground))]">Connection will be verified before saving.</p>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">Connection will be verified before saving. Domains and mailboxes load automatically after connecting.</p>
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <Btn variant="outline" onClick={() => setShowCfg(false)}>Cancel</Btn>
