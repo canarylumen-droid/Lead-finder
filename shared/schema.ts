@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -57,6 +57,7 @@ export const leads = pgTable("leads", {
   scrapedAt: timestamp("scraped_at").defaultNow(),
 }, (t) => ({
   sessionIdx: uniqueIndex("leads_session_name_city_idx").on(t.sessionId, t.name, t.city),
+  userNameCityIdx: index("leads_user_name_city_idx").on(t.userId, t.name, t.city),
 }));
 export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, scrapedAt: true });
 export type Lead = typeof leads.$inferSelect;

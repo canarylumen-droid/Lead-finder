@@ -193,11 +193,17 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
   const [searchResults, setSearchResults] = useState<Lead[]>([]);
   const [searchTotal, setSearchTotal]     = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [serverIp, setServerIp]           = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const animLeads  = useAnimNum(stats?.totalLeads  ?? 0);
   const animEmails = useAnimNum(stats?.totalEmails ?? 0);
   const animPhones = useAnimNum(stats?.totalPhones ?? 0);
+
+  // Fetch server IP once on mount
+  useEffect(() => {
+    fetch("/api/server-ip").then((r) => r.json()).then((d: { ip: string }) => setServerIp(d.ip)).catch(() => {});
+  }, []);
 
   // Debounce search
   useEffect(() => {
@@ -380,6 +386,15 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
           )}
 
           <div className="ml-auto flex items-center gap-1.5">
+            {serverIp && (
+              <span data-testid="text-server-ip"
+                className="hidden md:flex items-center gap-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-400 font-mono">
+                <svg className="w-3 h-3 text-green-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="3"/>
+                </svg>
+                {serverIp}
+              </span>
+            )}
             <span className="text-gray-500 text-xs hidden lg:block truncate max-w-[160px]">{user.email}</span>
             <button onClick={onNewScrape} data-testid="btn-new-scrape"
               className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition">

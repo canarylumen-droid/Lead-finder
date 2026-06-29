@@ -351,8 +351,9 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
                     onChange={(e) => setMaxReviews(Math.max(0, parseInt(e.target.value) || 0))}
                     className={inputCls + " w-28 shrink-0"} />
                   <p className="text-xs text-gray-500 leading-relaxed mt-1">
-                    Scrapes businesses with up to <span className="text-gray-300">{maxReviews || "unlimited"} reviews</span>.
-                    Set to 0 for no limit. Always starts from page 3+ of Google Maps (low-visibility leads).
+                    Only scrapes businesses with{" "}
+                    <span className="text-gray-300">{maxReviews > 0 ? `≤ ${maxReviews} reviews` : "any number of reviews"}</span>.
+                    {" "}Low-review businesses are easier to close — less established competition.
                   </p>
                 </div>
                 <div className="flex gap-1.5 flex-wrap">
@@ -360,7 +361,7 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
                     <button key={v} onClick={() => setMaxReviews(v)} data-testid={`rev-${v}`}
                       className={`px-2.5 py-1 rounded text-xs border transition ${maxReviews === v
                         ? "bg-green-500/20 text-green-300 border-green-500/40" : "bg-gray-800 text-gray-500 border-gray-700 hover:border-gray-600"}`}>
-                      {v === 0 ? "No limit" : `≤ ${v}`}
+                      {v === 0 ? "No limit" : `≤ ${v} reviews`}
                     </button>
                   ))}
                 </div>
@@ -370,7 +371,7 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
               <div className="flex items-center justify-between pt-4 border-t border-gray-800">
                 <div>
                   <p className="text-sm font-medium text-white">Include Phone Numbers</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Scraped from Google Maps. Optional — email is always collected.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Scraped directly from Google Maps listings.</p>
                 </div>
                 <button data-testid="switch-phone" onClick={() => setIncludePhone(!includePhone)}
                   className={`relative w-10 h-6 rounded-full transition-colors ${includePhone ? "bg-green-500" : "bg-gray-700"}`}>
@@ -379,7 +380,7 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
               </div>
 
               <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2.5 text-xs text-blue-300 leading-relaxed">
-                <strong>Email always searched</strong> — visits each business website in parallel, extracts the real contact email, and validates it with a DNS mail-server check.
+                <strong>Email automatically searched for every lead</strong> — visits each business website, extracts the contact email (mailto links, schema.org, and page text), and validates it with a live DNS check.
               </div>
             </div>
 

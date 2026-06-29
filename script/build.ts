@@ -10,6 +10,16 @@ const allowlist = [
   "puppeteer-extra",
   "puppeteer-extra-plugin-stealth",
   "zod",
+  // Bundle these pure-JS packages so they don't need to be in node_modules at runtime
+  "nodemailer",
+  "smtp-server",
+  "ws",
+  "cheerio",
+  "p-limit",
+  "p-retry",
+  "zod-validation-error",
+  "connect-pg-simple",
+  "memorystore",
 ];
 
 async function buildAll() {

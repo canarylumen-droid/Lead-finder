@@ -9,6 +9,7 @@ import { db } from "./db.js";
 import { leads, scrapeSessions } from "../shared/schema.js";
 import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
 import { z } from "zod";
+import os from "os";
 
 export const router = Router();
 
@@ -45,6 +46,31 @@ function formatPhone(raw: string | null, country: string): string {
 // ── Health check ──────────────────────────────────────────────────────────────
 router.get("/api/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime() });
+});
+
+// ── Server IP ─────────────────────────────────────────────────────────────────
+let _cachedIp: string | null = null;
+router.get("/api/server-ip", async (_req: Request, res: Response) => {
+  if (_cachedIp) { res.json({ ip: _cachedIp }); return; }
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch("https://api.ipify.org?format=json", { signal: ctrl.signal });
+    clearTimeout(t);
+    const data = await r.json() as { ip: string };
+    _cachedIp = data.ip;
+    res.json({ ip: data.ip });
+  } catch {
+    const nets = os.networkInterfaces();
+    let ip = "unknown";
+    for (const ifaces of Object.values(nets)) {
+      for (const iface of (ifaces ?? [])) {
+        if (iface.family === "IPv4" && !iface.internal) { ip = iface.address; break; }
+      }
+      if (ip !== "unknown") break;
+    }
+    res.json({ ip });
+  }
 });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
