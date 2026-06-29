@@ -88,7 +88,8 @@ INSERT INTO smtp_providers (slug, name, smtp_host, smtp_port, smtp_user_template
   ('cloudmailin',     'Cloudmailin',              'smtp.cloudmailin.net',      587, '{address}',     'cloudmailin.net',         'cm',         NULL,                                             'https://docs.cloudmailin.com',        0, '#4285f4'),
   ('mandrill',        'Mandrill (Mailchimp)',      'smtp.mandrillapp.com',      587, 'apikey',        'spf.mandrillapp.com',     'mandrill',   'https://mandrillapp.com/api/1.0',                'https://mailchimp.com/developer',     0, '#ffe01b'),
   ('zohomail',        'Zoho Mail',                'smtp.zoho.com',             465, '{email}',       'zoho.com',                'zoho',       'https://mail.zoho.com/api',                      'https://www.zoho.com/mail/help',      0, '#e42527'),
-  ('smtpcom',         'SMTP.com',                 'send.smtp.com',             2525,'{login}',       'smtp.com',                'smtp',       'https://api.smtp.com/v4',                        'https://www.smtp.com/resources',      0, '#1565c0')
+  ('smtpcom',         'SMTP.com',                 'send.smtp.com',             2525,'{login}',       'smtp.com',                'smtp',       'https://api.smtp.com/v4',                        'https://www.smtp.com/resources',      0, '#1565c0'),
+  ('custom',          'Custom SMTP',              NULL,                        587,  NULL,            NULL,                      NULL,         NULL,                                             NULL,                                  0, '#6366f1')
 ON CONFLICT (slug) DO UPDATE SET
   smtp_host = EXCLUDED.smtp_host,
   smtp_port = EXCLUDED.smtp_port,

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { User } from "../App";
 import { apiRequest } from "../lib/queryClient";
-import { Plus, Trash2, Server, CheckCircle, XCircle, RefreshCw, Key, Globe, Inbox, Wand2, X } from "lucide-react";
+import { Plus, Trash2, Server, CheckCircle, XCircle, RefreshCw, Key, Globe, Inbox, Wand2, X, Zap } from "lucide-react";
 
 interface MCfg { id: number; baseUrl: string; relayConfigured: number; }
 interface MCDomain { domain_name: string; active: number; aliases_in_domain?: number; mboxes_in_domain?: number; }
@@ -64,6 +64,7 @@ export default function MailcowPage({ user }: { user: User }) {
 
   const [tab,         setTab]         = useState<"domains" | "mailboxes">("domains");
   const [showCfg,     setShowCfg]     = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
   const [cfgUrl,      setCfgUrl]      = useState("");
   const [cfgKey,      setCfgKey]      = useState("");
   const [showDom,     setShowDom]     = useState(false);
@@ -159,6 +160,21 @@ export default function MailcowPage({ user }: { user: User }) {
     onError: (e: Error) => toast(e.message, false),
   });
 
+  async function autoAssignSmtp() {
+    setAutoAssigning(true);
+    try {
+      const domains = allDomains.map((d) => d.domain_name).filter(Boolean);
+      if (domains.length === 0) { toast("No Mailcow domains found — add domains first", false); return; }
+      const r = await apiRequest("POST", "/api/smtp/mappings/auto-assign", { domains }, h);
+      const data = await r.json() as { assigned: number; skipped: number; message: string };
+      toast(data.message);
+    } catch (e: unknown) {
+      toast((e as Error).message || "Auto-assign failed", false);
+    } finally {
+      setAutoAssigning(false);
+    }
+  }
+
   async function viewDkim(domain: string) {
     try {
       const r = await fetch(`/api/mailcow/dkim/${domain}`, { headers: h });
@@ -220,6 +236,11 @@ export default function MailcowPage({ user }: { user: User }) {
             </Btn>
             <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={() => setShowSync(true)} data-testid="button-sync-dns">
               <Wand2 size={12} />Sync DNS
+            </Btn>
+            <Btn variant="outline" className="text-xs px-3 py-1.5" onClick={autoAssignSmtp} disabled={autoAssigning} data-testid="button-auto-assign-smtp">
+              {autoAssigning
+                ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Assigning…</>
+                : <><Zap size={12} />Auto-Assign SMTP</>}
             </Btn>
           </div>
         </div>

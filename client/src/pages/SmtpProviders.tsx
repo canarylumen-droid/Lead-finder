@@ -236,6 +236,7 @@ export default function SmtpProviders({ user }: { user: User }) {
   const [mapPrimary,  setMapPrimary]  = useState("");
   const [mapFallback, setMapFallback] = useState("");
   const [provSearch,  setProvSearch]  = useState("");
+  const [assigning,   setAssigning]   = useState(false);
 
   const { data: pd } = useQuery<{ providers: Provider[] }>({
     queryKey: ["/api/smtp/providers"],
@@ -282,12 +283,32 @@ export default function SmtpProviders({ user }: { user: User }) {
     onError: (e: Error) => toast(e.message, false),
   });
 
-  const providerById = (id: number) => providers.find((p) => p.id === id);
-  const acctById     = (id: number) => accounts.find((a) => a.id === id);
+  const providerById  = (id: number) => providers.find((p) => p.id === id);
+  const acctById      = (id: number) => accounts.find((a) => a.id === id);
+  const customProvider = providers.find((p) => p.slug === "custom") ?? null;
 
   function openEdit(acct: Account) {
     setEditAcct(acct);
     setEditProvider(providerById(acct.providerId) ?? null);
+  }
+
+  async function autoAssignMailcow() {
+    setAssigning(true);
+    try {
+      const r = await fetch("/api/mailcow/domains", { headers: h });
+      if (!r.ok) { toast("Could not fetch Mailcow domains — is Mailcow connected?", false); return; }
+      const d = await r.json() as { domains?: Array<{ domain_name: string }> };
+      const domains = (d.domains ?? []).map((x) => x.domain_name).filter(Boolean);
+      if (domains.length === 0) { toast("No Mailcow domains found", false); return; }
+      const res = await apiRequest("POST", "/api/smtp/mappings/auto-assign", { domains }, h);
+      const data = await res.json() as { assigned: number; skipped: number; message: string };
+      qc.invalidateQueries({ queryKey: ["/api/smtp/mappings", user.id] });
+      toast(data.message);
+    } catch (e: unknown) {
+      toast((e as Error).message || "Auto-assign failed", false);
+    } finally {
+      setAssigning(false);
+    }
   }
 
   return (
@@ -329,7 +350,7 @@ export default function SmtpProviders({ user }: { user: User }) {
           />
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
-          {filtered.map((p) => (
+          {filtered.filter((p) => p.slug !== "custom").map((p) => (
             <div
               key={p.id}
               onClick={() => setSelProvider(p)}
@@ -343,6 +364,22 @@ export default function SmtpProviders({ user }: { user: User }) {
               </div>
             </div>
           ))}
+          {/* Custom SMTP "+" tile */}
+          {customProvider && (
+            <div
+              onClick={() => setSelProvider(customProvider)}
+              data-testid="card-provider-custom"
+              className="group flex items-center gap-2.5 p-3 bg-[hsl(var(--muted)/0.3)] hover:bg-[hsl(var(--primary)/0.08)] border border-dashed border-[hsl(var(--border))] hover:border-[hsl(var(--primary)/0.5)] rounded-xl cursor-pointer transition-all"
+            >
+              <div className="w-[26px] h-[26px] rounded-lg bg-[hsl(var(--primary)/0.15)] flex items-center justify-center shrink-0">
+                <Plus size={14} className="text-[hsl(var(--primary))]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-[hsl(var(--foreground))] truncate">Custom SMTP</p>
+                <span className="text-[10px] text-[hsl(var(--muted-foreground))]">Any provider</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -413,9 +450,16 @@ export default function SmtpProviders({ user }: { user: User }) {
 
       {/* Domain → Relay Mappings */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-[hsl(var(--border))]">
-          <h2 className="text-sm font-semibold text-[hsl(var(--foreground))]">Domain → Relay Mappings</h2>
-          <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">The multiplexer (127.0.0.1:2525) routes each sender domain to the mapped SMTP account.</p>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[hsl(var(--border))] flex-wrap gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-[hsl(var(--foreground))]">Domain → Relay Mappings</h2>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">The multiplexer (127.0.0.1:2525) routes each sender domain to the mapped SMTP account.</p>
+          </div>
+          <Btn variant="outline" className="text-xs px-3 py-1.5 shrink-0" onClick={autoAssignMailcow} disabled={assigning} data-testid="button-auto-assign-domains" title="Fetch Mailcow domains and assign to accounts round-robin">
+            {assigning
+              ? <><span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Assigning…</>
+              : <><Zap size={12} />Auto-Assign Mailcow Domains</>}
+          </Btn>
         </div>
         {/* Add form */}
         <div className="p-5 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.3)]">

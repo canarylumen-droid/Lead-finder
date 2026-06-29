@@ -22,8 +22,8 @@ export interface ScrapeConfig {
   includePhone: boolean;
 }
 
-// ─── Start from first result — maxReviews filter handles qualification ────────
-const SKIP_TOP_RESULTS = 0;
+// ─── Skip top results (high-review businesses from page 1) ───────────────────
+const SKIP_TOP_RESULTS = 20;
 const EMIT_EVERY       = 1;  // emit WebSocket update on every new lead
 
 // ─── Concurrency config ───────────────────────────────────────────────────────
@@ -85,6 +85,9 @@ async function saveLead(
   website: string | null,
   globalSeen: Set<string>,
 ) {
+  // Email-mandatory: skip businesses without a website (email can never be found)
+  if (!website) return;
+
   // Cross-session dedup: skip if this user already has this business+city
   const dedupeKey = `${data.name.toLowerCase()}|${data.city.toLowerCase()}`;
   if (globalSeen.has(dedupeKey)) return;

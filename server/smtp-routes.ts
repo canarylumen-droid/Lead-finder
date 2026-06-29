@@ -234,6 +234,47 @@ smtpRouter.post("/api/smtp/accounts/:id/test", async (req: Request, res: Respons
   }
 });
 
+// ── POST /api/smtp/mappings/auto-assign ───────────────────────────────────────
+// Assigns Mailcow domains to SMTP accounts round-robin.
+// Body: { domains: string[] }  — list of Mailcow domain names
+smtpRouter.post("/api/smtp/mappings/auto-assign", async (req: Request, res: Response) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const parsed = z.object({ domains: z.array(z.string().min(1)).min(1) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ message: parsed.error.issues[0].message });
+
+  const domainList = parsed.data.domains;
+
+  const accounts = await db.select().from(smtpAccounts).where(eq(smtpAccounts.userId, userId));
+  if (accounts.length === 0) return void res.status(400).json({ message: "No SMTP accounts found. Add at least one account first." });
+
+  const existing = await db.select().from(domainAccountMap).where(eq(domainAccountMap.userId, userId));
+  const alreadyMapped = new Set(existing.map((m) => m.domain));
+
+  const toAssign = domainList.filter((d) => !alreadyMapped.has(d));
+  if (toAssign.length === 0) return void res.json({ assigned: 0, skipped: domainList.length, message: "All domains already have mappings." });
+
+  let idx = 0;
+  const inserted: typeof domainAccountMap.$inferSelect[] = [];
+  for (const domain of toAssign) {
+    const account = accounts[idx % accounts.length];
+    idx++;
+    try {
+      const [row] = await db
+        .insert(domainAccountMap)
+        .values({ userId, domain, primaryAccountId: account.id, fallbackAccountId: null })
+        .onConflictDoNothing()
+        .returning();
+      if (row) inserted.push(row);
+    } catch {
+      // skip conflicts
+    }
+  }
+
+  res.json({ assigned: inserted.length, skipped: alreadyMapped.size, message: `Assigned ${inserted.length} domain${inserted.length !== 1 ? "s" : ""} to SMTP accounts.` });
+});
+
 // ── GET /api/smtp/relay/stats ─────────────────────────────────────────────────
 smtpRouter.get("/api/smtp/relay/stats", async (req: Request, res: Response) => {
   const userId = requireUser(req, res);
