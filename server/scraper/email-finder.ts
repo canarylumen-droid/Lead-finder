@@ -72,7 +72,7 @@ function extractEmailsFromHtml(html: string): string[] {
       extract(data);
     } catch {}
   });
-  if (jsonLdEmails.length > 0) return [...new Set(jsonLdEmails)];
+  if (jsonLdEmails.length > 0) return Array.from(new Set(jsonLdEmails));
 
   // Priority 3: page text with scripts/styles removed
   $("script, style, noscript, code, pre, header, footer, nav").remove();

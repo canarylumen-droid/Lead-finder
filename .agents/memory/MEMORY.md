@@ -1,0 +1,1 @@
+- [Lead Finder setup](lead-finder-setup.md) — merge conflict resolution, migration safety fix, and TS quirks for this project.

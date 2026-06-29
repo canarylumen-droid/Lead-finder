@@ -3,22 +3,17 @@ import pg from "pg";
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+// Non-destructive migration: creates tables and columns only if they don't exist.
+// Safe to run on every deploy — existing data is never dropped.
 const sql = `
-DROP TABLE IF EXISTS job_logs CASCADE;
-DROP TABLE IF EXISTS dedupe_hashes CASCADE;
-DROP TABLE IF EXISTS scrape_jobs CASCADE;
-DROP TABLE IF EXISTS leads CASCADE;
-DROP TABLE IF EXISTS scrape_sessions CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
-
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE scrape_sessions (
+CREATE TABLE IF NOT EXISTS scrape_sessions (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id),
   niches TEXT NOT NULL,
@@ -33,9 +28,13 @@ CREATE TABLE scrape_sessions (
   started_at TIMESTAMP DEFAULT NOW(),
   completed_at TIMESTAMP
 );
-CREATE INDEX idx_sessions_user ON scrape_sessions(user_id);
 
-CREATE TABLE leads (
+-- Add include_phone if it was missing from an older migration
+ALTER TABLE scrape_sessions ADD COLUMN IF NOT EXISTS include_phone INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON scrape_sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS leads (
   id SERIAL PRIMARY KEY,
   session_id INTEGER NOT NULL REFERENCES scrape_sessions(id),
   user_id INTEGER NOT NULL,
@@ -51,12 +50,13 @@ CREATE TABLE leads (
   email TEXT,
   email_verified INTEGER DEFAULT 0,
   maps_url TEXT,
-  scraped_at TIMESTAMP DEFAULT NOW(),
-  UNIQUE(session_id, name, city)
+  scraped_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX idx_leads_session ON leads(session_id);
-CREATE INDEX idx_leads_user ON leads(user_id);
-CREATE INDEX idx_leads_session_scraped ON leads(session_id, scraped_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS leads_session_name_city_idx ON leads(session_id, name, city);
+CREATE INDEX IF NOT EXISTS idx_leads_session ON leads(session_id);
+CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id);
+CREATE INDEX IF NOT EXISTS idx_leads_session_scraped ON leads(session_id, scraped_at DESC);
 `;
 
 async function main() {

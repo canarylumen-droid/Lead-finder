@@ -1,7 +1,6 @@
-<<<<<<< HEAD
-# Overview
+# Lead Finder
 
-This is a lead scraping and qualification platform built with React, Express, and PostgreSQL. The application allows users to scrape social media profiles (Instagram, LinkedIn), analyze them using AI to determine business fit, and manage qualified leads through a dashboard interface. It features real-time job progress tracking via WebSocket, a worker pool for concurrent scraping, and AI-powered profile analysis to score and categorize leads.
+A lead scraping and qualification platform built with React, Express, and PostgreSQL. The application allows users to scrape social media profiles (Instagram, LinkedIn) and Google Maps listings, analyze them using AI to determine business fit, and manage qualified leads through a dashboard interface. It features real-time job progress tracking via WebSocket, a worker pool for concurrent scraping, and AI-powered profile analysis to score and categorize leads.
 
 # User Preferences
 
@@ -23,7 +22,7 @@ Preferred communication style: Simple, everyday language.
 - **Runtime**: Node.js with tsx for development
 - **Real-time Communication**: WebSocket server (ws) integrated with HTTP server for live job logs
 - **Worker Pool**: Custom EventEmitter-based worker pool (20 concurrent workers) for parallel scraping tasks
-- **AI Integration**: OpenAI API via Replit AI Integrations for profile analysis and lead qualification
+- **AI Integration**: OpenAI API and Google Gemini API for profile analysis and lead qualification
 
 ## Data Layer
 - **Database**: PostgreSQL with Drizzle ORM
@@ -42,10 +41,10 @@ Preferred communication style: Simple, everyday language.
 - WebSocket endpoint at /ws for real-time job updates
 
 ## Build System
-- **Development**: Vite dev server with HMR
+- **Development**: Vite dev server with HMR (`npm run dev`)
 - **Production**: 
   - Client: Vite builds to dist/public
-  - Server: esbuild bundles server to dist/index.cjs with selective dependency bundling
+  - Server: esbuild bundles server to dist/index.cjs
 
 # External Dependencies
 
@@ -55,67 +54,33 @@ Preferred communication style: Simple, everyday language.
 - Session storage: connect-pg-simple
 
 ## AI Services
-- OpenAI API (standard format for Vercel deployment)
-- Environment variable: OPENAI_API_KEY
-- Used for: offering analysis, profile analysis, lead qualification scoring, buyer intent detection
+- OpenAI API — OPENAI_API_KEY env var
+- Google Gemini API — GEMINI_API_KEY env var
+- Used for: profile analysis, lead qualification scoring, buyer intent detection
 
 ## Web Scraping
 - Cheerio for HTML parsing
-- Custom scraper module in server/scraper/
+- Playwright Chromium for browser automation
+- Puppeteer-extra with stealth plugin for anti-bot evasion
+- Custom scraper modules in server/scraper/
 
 ## Batch Processing
 - p-limit for concurrency control
 - p-retry for automatic retry with exponential backoff
 
-## Additional Integrations
-- Stripe (payment processing)
-- Nodemailer (email sending)
-- Multer (file uploads)
-- XLSX (spreadsheet export)
-=======
-# [Project name]
+# Run & Operate
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+- `npm run dev` — start dev server (port 5000)
+- `npm run build` — production build
+- `npm run db:push` — push DB schema changes (requires DATABASE_URL)
+- Required env vars: `DATABASE_URL`, `OPENAI_API_KEY` or `GEMINI_API_KEY`, `SESSION_SECRET`
 
-## Run & Operate
+# Docker
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+A `Dockerfile` is provided for containerized deployment. Uses Node 20 slim with all Chromium/Playwright system dependencies pre-installed. See `EC2_DEPLOYMENT.md` for AWS deployment guide.
 
-## Stack
+# Gotchas
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
-
-## Where things live
-
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
-
-## Architecture decisions
-
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
->>>>>>> 185439b (Initial commit)
+- Playwright Chromium must be installed after npm install: `npx playwright install chromium`
+- The app uses `npm` (not pnpm) — ignore the pnpm workspace files, they belong to the Replit template scaffold
+- DATABASE_URL must be set before running migrations or starting the server
