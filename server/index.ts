@@ -1,7 +1,11 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { router } from "./routes.js";
+import { smtpRouter } from "./smtp-routes.js";
+import { mailcowRouter } from "./mailcow-routes.js";
+import { dnsRouter } from "./dns-routes.js";
 import { setupWebSocketServer } from "./websocket.js";
+import { startRelayServer } from "./smtp-relay/index.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -27,15 +31,25 @@ app.use((req, _res, next) => {
 });
 
 app.use(router);
+app.use(smtpRouter);
+app.use(mailcowRouter);
+app.use(dnsRouter);
 
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  const status = err.status || 500;
-  res.status(status).json({ message: err.message || "Internal Server Error" });
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  const e = err as { status?: number; message?: string };
+  const status = e.status || 500;
+  res.status(status).json({ message: e.message || "Internal Server Error" });
 });
 
 (async () => {
-  // WebSocket server (same HTTP server, path /ws)
   setupWebSocketServer(httpServer);
+
+  // Start SMTP relay multiplexer on port 2525
+  try {
+    startRelayServer();
+  } catch (err: unknown) {
+    console.error("[relay] Failed to start:", (err as Error).message);
+  }
 
   if (process.env.NODE_ENV === "production") {
     const { serveStatic } = await import("./static.js");
