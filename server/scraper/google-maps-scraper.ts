@@ -27,17 +27,24 @@ const SKIP_TOP_RESULTS = 0;
 const EMIT_EVERY       = 1;  // emit WebSocket update on every new lead
 
 // ─── Concurrency config ───────────────────────────────────────────────────────
+// Email workers are plain HTTP fetches — extremely lightweight, scale aggressively.
+// Map workers are Playwright browser contexts sharing one browser process (~20-30MB each).
+// Override via env: SCRAPER_CONCURRENCY=N  EMAIL_CONCURRENCY=N
 function detectConcurrency(): { maps: number; email: number } {
   const gbTotal = os.totalmem() / 1024 ** 3;
   let maps: number;
   let email: number;
-  if      (gbTotal >= 56) { maps = 10; email = 200; }
-  else if (gbTotal >= 28) { maps =  6; email = 150; }
-  else if (gbTotal >= 14) { maps =  4; email = 100; }
-  else if (gbTotal >=  7) { maps =  3; email =  80; }
-  else                    { maps =  2; email =  40; }
+
+  if      (gbTotal >= 60) { maps = 800;  email = 15_000; }  // 64 GB
+  else if (gbTotal >= 28) { maps = 500;  email =  7_500; }  // 32 GB
+  else if (gbTotal >= 14) { maps =  12;  email =    400; }  // 16 GB
+  else if (gbTotal >=  7) { maps =   4;  email =    100; }  //  8 GB
+  else if (gbTotal >=  3) { maps =   2;  email =     50; }  //  4 GB
+  else                    { maps =   1;  email =     20; }  // tiny / CI
+
   if (process.env.SCRAPER_CONCURRENCY) maps  = parseInt(process.env.SCRAPER_CONCURRENCY, 10);
   if (process.env.EMAIL_CONCURRENCY)   email = parseInt(process.env.EMAIL_CONCURRENCY,   10);
+
   console.log(`[scraper] RAM: ${gbTotal.toFixed(1)} GB → Maps: ${maps}, Email: ${email}`);
   return { maps, email };
 }
@@ -157,8 +164,9 @@ async function scrapeQuery(opts: {
   const query      = `${niche} in ${city}`;
   const url        = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
-  // Stagger concurrent requests: random delay 0–4s to avoid simultaneous Google hits
-  await sleep(Math.floor(Math.random() * 4000));
+  // Light stagger: 0–1.5s at high concurrency to avoid thundering-herd on Google
+  const staggerMs = MAPS_CONCURRENCY > 50 ? Math.floor(Math.random() * 1500) : Math.floor(Math.random() * 4000);
+  await sleep(staggerMs);
 
   let context;
   try {
@@ -326,6 +334,13 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
         "--no-first-run", "--no-zygote",
         "--disable-background-networking", "--disable-default-apps",
         "--disable-extensions", "--mute-audio",
+        // High-concurrency memory optimisations
+        "--memory-pressure-off",
+        "--max_old_space_size=4096",
+        "--js-flags=--max-old-space-size=4096",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
       ],
     });
 
