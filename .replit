@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 modules = ["nodejs-20", "web", "postgresql-16"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
@@ -16,10 +17,22 @@ PORT = "5000"
 deploymentTarget = "autoscale"
 run = ["node", "./dist/index.cjs"]
 build = ["npm", "run", "build"]
+=======
+modules = ["nodejs-24"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+>>>>>>> 185439b (Initial commit)
 
 [workflows]
 runButton = "Project"
 
+<<<<<<< HEAD
 [[workflows.workflow]]
 name = "Project"
 mode = "parallel"
@@ -45,3 +58,12 @@ outputType = "webview"
 integrations = ["javascript_openai_ai_integrations:2.0.0"]
 expertMode = true
 stack = "FULLSTACK_JS"
+=======
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+>>>>>>> 185439b (Initial commit)
