@@ -1,5 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { rm, readFile } from "fs/promises";
+import { build as viteBuild } from "vite";
 
 const allowlist = [
   "drizzle-orm",
@@ -37,6 +38,12 @@ async function buildAll() {
   });
 
   console.log("build complete → dist/index.cjs");
+
+  console.log("building client...");
+  await viteBuild({
+    configFile: "vite.config.ts",
+  });
+  console.log("client build complete → dist/public");
 }
 
 buildAll().catch((err) => {
