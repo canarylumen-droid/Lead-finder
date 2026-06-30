@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { rm, readFile } from "fs/promises";
 import { build as viteBuild } from "vite";
+import { execSync } from "child_process";
 
 const allowlist = [
   "drizzle-orm",
@@ -53,6 +54,10 @@ async function buildAll() {
     configFile: "vite.config.ts",
   });
   console.log("client build complete → dist/public");
+
+  console.log("installing Playwright Chromium...");
+  execSync("npx playwright install chromium", { stdio: "inherit" });
+  console.log("Chromium installed");
 }
 
 buildAll().catch((err) => {
