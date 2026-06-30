@@ -302,8 +302,9 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
     }
   };
 
-  const downloadCSV = async (sid: number) => {
-    const r    = await fetch(`/api/sessions/${sid}/download`, { headers: { "x-user-id": String(user.id) } });
+  const downloadCSV = async (sid: number, emailOnly = false) => {
+    const qs   = emailOnly ? "?emailOnly=true" : "";
+    const r    = await fetch(`/api/sessions/${sid}/download${qs}`, { headers: { "x-user-id": String(user.id) } });
     const blob = await r.blob();
     const cd   = r.headers.get("Content-Disposition") ?? "";
     const name = cd.match(/filename="(.+)"/)?.[1] ?? `leads_${sid}.csv`;
@@ -312,14 +313,17 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  const exportAll = async () => {
+  const exportAll = async (emailOnly = false) => {
     setExporting(true);
     try {
-      const r = await fetch("/api/leads/export", { headers: { "x-user-id": String(user.id) } });
+      const qs = emailOnly ? "?emailOnly=true" : "";
+      const r  = await fetch(`/api/leads/export${qs}`, { headers: { "x-user-id": String(user.id) } });
       if (!r.ok) { alert("No leads to export yet"); return; }
       const blob = await r.blob();
+      const cd   = r.headers.get("Content-Disposition") ?? "";
+      const name = cd.match(/filename="(.+)"/)?.[1] ?? `all_leads_${new Date().toISOString().slice(0, 10)}.csv`;
       const url  = URL.createObjectURL(blob);
-      Object.assign(document.createElement("a"), { href: url, download: `all_leads_${new Date().toISOString().slice(0, 10)}.csv` }).click();
+      Object.assign(document.createElement("a"), { href: url, download: name }).click();
       URL.revokeObjectURL(url);
     } finally { setExporting(false); }
   };
@@ -403,12 +407,19 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
               </svg>
               <span className="hidden sm:inline">New Scrape</span>
             </button>
-            <button onClick={exportAll} disabled={exporting} data-testid="btn-export-all"
-              className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg border border-gray-700 transition disabled:opacity-50">
+            <button onClick={() => exportAll(true)} disabled={exporting} data-testid="btn-export-emails"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg border border-green-600 transition disabled:opacity-50">
               <svg className={`w-3.5 h-3.5 ${exporting ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {exporting
                   ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>}
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>}
+              </svg>
+              <span className="hidden sm:inline">Export Emails</span>
+            </button>
+            <button onClick={() => exportAll(false)} disabled={exporting} data-testid="btn-export-all"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg border border-gray-700 transition disabled:opacity-50">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
               </svg>
               <span className="hidden sm:inline">Export All</span>
             </button>
@@ -656,14 +667,24 @@ export default function Dashboard({ user, onLogout, onNewScrape }: Props) {
                   <span className="text-xs text-gray-500 shrink-0">{searchLoading ? "…" : fmt(searchTotal) + " results"}</span>
                 )}
                 {selectedSession && !isSearchMode && (
-                  <button data-testid={`btn-csv-${selectedSession.id}`}
-                    onClick={() => downloadCSV(selectedSession.id)}
-                    className="flex items-center gap-1 px-2.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-lg border border-gray-700 transition shrink-0">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                    <span className="hidden sm:inline">Download CSV</span>
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button data-testid={`btn-csv-email-${selectedSession.id}`}
+                      onClick={() => downloadCSV(selectedSession.id, true)}
+                      className="flex items-center gap-1 px-2.5 py-2 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg border border-green-600 transition">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                      </svg>
+                      <span className="hidden sm:inline">Emails CSV</span>
+                    </button>
+                    <button data-testid={`btn-csv-${selectedSession.id}`}
+                      onClick={() => downloadCSV(selectedSession.id, false)}
+                      className="flex items-center gap-1 px-2.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-lg border border-gray-700 transition">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                      </svg>
+                      <span className="hidden sm:inline">All CSV</span>
+                    </button>
+                  </div>
                 )}
               </div>
             )}

@@ -7,7 +7,7 @@ import { launchSessionSchema } from "../shared/schema.js";
 import { runScrapeSession, cancelledSessions, pausedSessions } from "./scraper/google-maps-scraper.js";
 import { db } from "./db.js";
 import { leads, scrapeSessions } from "../shared/schema.js";
-import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql, isNotNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import os from "os";
 
@@ -339,9 +339,11 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
   const session = await getSession(parseInt(String(req.params.id), 10));
   if (!session || session.userId !== userId) return void res.status(404).json({ message: "Not found" });
 
-  const allLeads = await streamLeadsForCSV(session.id, userId);
-  const niches   = tryParse(session.niches, [] as string[]);
-  const filename = `leads_${(niches[0] ?? "data").replace(/\s+/g, "_")}_${session.id}_${new Date().toISOString().slice(0, 10)}.csv`;
+  const emailOnly = req.query.emailOnly === "true";
+  const allLeads  = await streamLeadsForCSV(session.id, userId, emailOnly);
+  const niches    = tryParse(session.niches, [] as string[]);
+  const tag       = emailOnly ? "emails_only_" : "";
+  const filename  = `${tag}leads_${(niches[0] ?? "data").replace(/\s+/g, "_")}_${session.id}_${new Date().toISOString().slice(0, 10)}.csv`;
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -350,18 +352,20 @@ router.get("/api/sessions/:id/download", async (req: Request, res: Response) => 
 
 // ── CSV export (all leads for user) ───────────────────────────────────────────
 router.get("/api/leads/export", async (req: Request, res: Response) => {
-  const userId = requireUser(req, res);
+  const userId    = requireUser(req, res);
   if (!userId) return;
+  const emailOnly = req.query.emailOnly === "true";
 
-  const allLeads = await db
-    .select()
-    .from(leads)
-    .where(eq(leads.userId, userId))
-    .orderBy(desc(leads.scrapedAt));
+  const where = emailOnly
+    ? and(eq(leads.userId, userId), isNotNull(leads.email), ne(leads.email, ""))
+    : eq(leads.userId, userId);
+
+  const allLeads = await db.select().from(leads).where(where).orderBy(desc(leads.scrapedAt));
 
   if (allLeads.length === 0) return void res.status(404).json({ message: "No leads found" });
 
-  const filename = `all_leads_${new Date().toISOString().slice(0, 10)}.csv`;
+  const tag      = emailOnly ? "emails_only_" : "";
+  const filename = `${tag}all_leads_${new Date().toISOString().slice(0, 10)}.csv`;
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(buildCSV(allLeads));

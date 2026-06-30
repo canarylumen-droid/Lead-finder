@@ -387,7 +387,7 @@ export default function Setup({ user, onLaunched, onLogout, onGoToDashboard }: P
             {/* Launch summary */}
             <div className={card}>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Launch Summary</h3>
-              <div className="grid grid-cols-3 gap-y-3 gap-x-4 text-sm">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4 text-sm">
                 {[
                   ["Niches", niches.length],
                   ["Target", targetVolume.toLocaleString()],

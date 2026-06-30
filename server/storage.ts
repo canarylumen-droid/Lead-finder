@@ -68,10 +68,13 @@ export async function getLeadsBySession(
 
 export async function streamLeadsForCSV(
   sessionId: number,
-  userId: number
+  userId: number,
+  emailOnly = false
 ): Promise<Lead[]> {
-  return db
-    .select()
-    .from(leads)
-    .where(and(eq(leads.sessionId, sessionId), eq(leads.userId, userId)));
+  const conds = [eq(leads.sessionId, sessionId), eq(leads.userId, userId)];
+  if (emailOnly) {
+    const { isNotNull, ne } = await import("drizzle-orm");
+    conds.push(isNotNull(leads.email), ne(leads.email, ""));
+  }
+  return db.select().from(leads).where(and(...conds));
 }

@@ -372,7 +372,7 @@ export async function runScrapeSession(config: ScrapeConfig): Promise<void> {
       queries.map((q) =>
         mapLimit(async () => {
           if (stopped.value || cancelledSessions.has(sessionId)) return;
-          if (state.leadsCount >= targetVolume) { stopped.value = true; return; }
+          if (state.emailCount >= targetVolume) { stopped.value = true; return; }
 
           // Wait while paused
           while (pausedSessions.has(sessionId) && !cancelledSessions.has(sessionId)) {
